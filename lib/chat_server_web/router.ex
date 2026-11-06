@@ -11,8 +11,27 @@ defmodule ChatServerWeb.Router do
     get "/health", HealthController, :show
   end
 
+  pipeline :authenticated do
+    plug ChatServerWeb.Plugs.Authenticate
+  end
+
   scope "/api/v1", ChatServerWeb do
     pipe_through :api
+
+    post "/auth/request_otp", AuthController, :request_otp
+    post "/auth/verify_otp", AuthController, :verify_otp
+    post "/auth/refresh", AuthController, :refresh
+  end
+
+  scope "/api/v1", ChatServerWeb do
+    pipe_through [:api, :authenticated]
+
+    post "/auth/logout", AuthController, :logout
+
+    get "/me", MeController, :show
+    patch "/me", MeController, :update
+
+    post "/devices/push_token", DeviceController, :push_token
   end
 
   # Enable LiveDashboard in development

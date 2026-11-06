@@ -1,0 +1,38 @@
+defmodule ChatServerWeb.FallbackController do
+  @moduledoc "Turns context errors into JSON responses."
+
+  use ChatServerWeb, :controller
+
+  @statuses %{
+    forbidden: :forbidden,
+    invalid_code: :unauthorized,
+    code_expired: :unauthorized,
+    invalid_refresh_token: :unauthorized,
+    too_many_attempts: :too_many_requests,
+    not_found: :not_found,
+    invalid_phone: :unprocessable_entity,
+    sms_provider_not_configured: :service_unavailable
+  }
+
+  def call(conn, {:error, %Ecto.Changeset{} = changeset}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: "validation_failed", details: errors_on(changeset)})
+  end
+
+  def call(conn, {:error, reason}) when is_map_key(@statuses, reason) do
+    conn |> put_status(@statuses[reason]) |> json(%{error: reason})
+  end
+
+  def call(conn, {:error, _reason}) do
+    conn |> put_status(:bad_gateway) |> json(%{error: "upstream_failure"})
+  end
+
+  defp errors_on(changeset) do
+    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
+      Regex.replace(~r"%{(\w+)}", message, fn _match, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+      end)
+    end)
+  end
+end

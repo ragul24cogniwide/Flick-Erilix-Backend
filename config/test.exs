@@ -21,6 +21,17 @@ config :chat_server, ChatServerWeb.Endpoint,
   secret_key_base: "7O0FkGEG2rQu67VekNqgsE2FB/57EiZ9aC6Lwur2QQGf4GW7Z1tAyAfnl5XsBhGP",
   server: false
 
+config :chat_server, :sms_provider, ChatServer.SmsProvider.TestDouble
+
+# Effectively off: tests that exercise limits lower them explicitly.
+config :chat_server, :rate_limits,
+  request_otp_phone: {1_000_000, 60},
+  request_otp_ip: {1_000_000, 60},
+  verify_otp_phone: {1_000_000, 60},
+  verify_otp_ip: {1_000_000, 60},
+  msg_send_user: {1_000_000, 60},
+  msg_send_ip: {1_000_000, 60}
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

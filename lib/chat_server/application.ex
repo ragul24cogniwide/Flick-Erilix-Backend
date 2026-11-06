@@ -12,8 +12,7 @@ defmodule ChatServer.Application do
       ChatServer.Repo,
       {DNSCluster, query: Application.get_env(:chat_server, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ChatServer.PubSub},
-      # Start a worker by calling: ChatServer.Worker.start_link(arg)
-      # {ChatServer.Worker, arg},
+      ChatServer.RateLimiter,
       # Start to serve requests, typically the last entry
       ChatServerWeb.Endpoint
     ]

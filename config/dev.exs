@@ -52,6 +52,9 @@ config :chat_server, ChatServerWeb.Endpoint,
 # configured to run both http and https servers on
 # different ports.
 
+# Print sign-in codes to the log.
+config :chat_server, :sms_provider, ChatServer.SmsProvider.Log
+
 # Enable dev routes for dashboard and mailbox
 config :chat_server, dev_routes: true
 

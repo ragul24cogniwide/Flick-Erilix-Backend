@@ -23,6 +23,10 @@ end
 config :chat_server, ChatServerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Set when a TLS proxy (nginx, Caddy) sits in front, so client IPs come from
+# x-forwarded-for. Leave unset otherwise, because clients can forge that header.
+config :chat_server, :trust_proxy, System.get_env("TRUST_PROXY") in ~w(true 1)
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

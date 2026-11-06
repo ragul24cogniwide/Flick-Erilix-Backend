@@ -11,6 +11,18 @@ config :chat_server,
   ecto_repos: [ChatServer.Repo],
   generators: [timestamp_type: :utc_datetime_usec, binary_id: true]
 
+# Replace with a real provider in production (see ChatServer.SmsProvider).
+config :chat_server, :sms_provider, ChatServer.SmsProvider.Unconfigured
+
+# scope: {max_hits, window_seconds}
+config :chat_server, :rate_limits,
+  request_otp_phone: {5, 3600},
+  request_otp_ip: {100, 3600},
+  verify_otp_phone: {10, 600},
+  verify_otp_ip: {100, 600},
+  msg_send_user: {120, 60},
+  msg_send_ip: {1200, 60}
+
 # Configure the endpoint
 config :chat_server, ChatServerWeb.Endpoint,
   url: [host: "localhost"],
