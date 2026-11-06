@@ -20,7 +20,7 @@ defmodule ChatServer.KeysConcurrencyTest do
 
   setup do
     :ok = Sandbox.checkout(Repo, sandbox: false)
-    session = session_fixture()
+    session = session_fixture(keys: false)
 
     on_exit(fn ->
       :ok = Sandbox.checkout(Repo, sandbox: false)

@@ -106,44 +106,64 @@ Measured on 2026-11-06 on an Apple M4 (10 threads), with Docker limited to about
 of memory, `POOL_SIZE=30`, and 256-byte messages. Each row is 1,000 sockets, all of which
 joined in 0.2–0.3 s.
 
-| Rate attempted | Messages | Rate achieved | Send ack p50 / p99 | Delivery p50 / p99 |
+| Rate attempted | Messages | Rate achieved | Delivery p50 | Delivery p99 |
 | --- | --- | --- | --- | --- |
-| 1,000/s | 5,000 | 831/s (limited by the script's pacing) | 1.6 / 5.0 ms | 1.4 / 4.6 ms |
-| 5,000/s | 10,000 | 3,421/s (saturated) | 308 / 561 ms | 554 / 952 ms |
-| 20,000/s | 20,000 | 3,901/s (saturated) | 1,419 / 2,613 ms | 3,300 / 3,541 ms |
+| 1,000/s (9 runs) | 5,000 each | 830/s (limited by the script's pacing) | 1.3–2.9 ms | 3.9–16.8 ms in 6 runs, 75–415 ms in 3 |
+| 5,000/s (1 run) | 10,000 | 4,118/s (saturated) | 230 ms | 499 ms |
+| 20,000/s (1 run) | 20,000 | 4,409/s (saturated) | 3,233 ms | 3,505 ms |
 
 In every run all messages were delivered and acknowledged, with 0 send errors, 0
 duplicates, 0 unexpected disconnects, and no ciphertext left on the server afterwards.
+Messages of 65,000 bytes also went through real sockets correctly in a smaller run.
 
-**How to read this:** the server handles about 1,000 messages/s comfortably on this
-machine and saturates at about 3,500–3,900/s. Past that point, messages queue and
-latency climbs, but nothing was lost. The client runs in the same VM as the server and
-Postgres runs in Docker on the same machine, so a dedicated server should differ.
-Memory read 450–710 KB per socket, but that includes the test client's own process and
-buffers, so it overstates what the server uses. This tests 1,000 sockets only, not
-millions.
+**How to read this:** the server handles about 1,000 messages/s on this machine and
+saturates at about 4,100–4,400/s. Past that point, messages queue and latency climbs, but
+nothing was lost. At 1,000/s, a third of runs had a brief stall that pushed p99 to 75–415
+ms. The cause has not been identified, and starting from a fresh database did not remove
+it, so test on your production hardware before relying on p99 figures.
+
+The client runs in the same VM as the server and Postgres runs in Docker on the same
+machine, alongside other containers, so a dedicated server should differ. Memory read
+450–700 KB per socket, but that includes the test client's own process and buffers, so
+it overstates what the server uses. This tests 1,000 sockets only, not millions, and each
+message here goes to one device, so groups will cost more per message.
+
+## End-to-end encryption
+
+Clients encrypt each message separately for every recipient device, using a proven
+Signal-protocol library. The server stores each device's copy on its delivery row and
+clears it as soon as that device acknowledges the message.
+
+1. Fetch each member's devices and keys with `GET /keys/:user_id`, and set up a session
+   per device. Each fetch uses up one of that device's one-time prekeys, so cache sessions.
+2. Send `msg:send` with `ciphertexts: [{device_id, ciphertext}]`, with one entry per
+   recipient device, including your own other devices.
+3. If the reply is `device_mismatch`, nothing was stored. Fetch keys for the devices in
+   `missing`, drop your sessions for those in `extra`, and send again with the same
+   `client_msg_id`.
+
+A device only becomes a recipient once it has uploaded keys with `PUT /keys`, so clients
+should do that straight after signing in.
 
 ## Design notes and known limits
 
 Choices the spec left open, and gaps to know about:
 
-- **One ciphertext per message.** As specified, a message has one ciphertext but one
-  delivery row per device. Pairwise Signal sessions encrypt separately for each device,
-  so one blob cannot serve several devices that way. Clients need a shared-key scheme
-  such as Signal's sender keys, and those keys still have to be distributed somehow. To
-  use plain pairwise encryption, the server would need one ciphertext per delivery row.
 - **Offline senders miss receipts.** Receipts are sent live only. Delivered and read
   times are stored, but a sender who was offline at that moment is not told later.
 - **Delivery is at-least-once.** A message is resent on reconnect until acked, so
   clients must dedupe by `message_id`.
 - **`system` messages.** Clients cannot send `kind: "system"`, which stops one member
   forging a notice to others. The server does not generate any yet.
-- **Multiple devices.** The sender's other devices also receive each message. A new
-  device receives only messages sent after it signed in.
-- **Recipients with no devices.** A message to someone with no signed-in device reaches
-  no one, and is dropped by the daily job after 30 days.
+- **Multiple devices.** The sender's other devices receive each message too, so the
+  client encrypts for them as well. A new device receives only messages sent after it
+  signed in and uploaded keys.
+- **Send limits.** A send is limited to 64 KB per device's copy and 3 MiB in total, so a
+  long message to a very large group is rejected with `message_too_large`.
+- **Recipients with no devices.** A message to someone with no signed-in device that has
+  uploaded keys reaches no one, and only its metadata is stored.
 - **Delivered metadata is never purged.** With `keep_metadata`, message and delivery
-  rows stay after the ciphertext is cleared. The daily job only removes undelivered
+  rows stay after the ciphertexts are cleared. The daily job only removes undelivered
   messages, so add a retention rule if that metadata should not be kept indefinitely.
 - **`delete_row` and read receipts.** Once a message is fully delivered its row is gone,
   so read receipts can no longer be recorded for it.

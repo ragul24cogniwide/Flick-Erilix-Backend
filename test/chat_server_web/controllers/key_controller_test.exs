@@ -9,7 +9,7 @@ defmodule ChatServerWeb.KeyControllerTest do
   alias ChatServer.Repo
 
   setup %{conn: conn} do
-    %{conn: conn, alice: session_fixture(), bob: session_fixture()}
+    %{conn: conn, alice: session_fixture(), bob: session_fixture(keys: false)}
   end
 
   defp as(conn, session) do
@@ -133,7 +133,7 @@ defmodule ChatServerWeb.KeyControllerTest do
     end
 
     test "returns one bundle per device", ctx do
-      tablet = session_fixture(phone: ctx.bob.user.phone)
+      tablet = session_fixture(phone: ctx.bob.user.phone, keys: false)
       assert upload(ctx.conn, tablet, identity("t")) |> response(200)
 
       %{"devices" => bundles} = fetch(ctx.conn, ctx.alice, ctx.bob) |> json_response(200)
@@ -149,7 +149,9 @@ defmodule ChatServerWeb.KeyControllerTest do
     end
 
     test "returns no devices for a user who has uploaded nothing", ctx do
-      assert %{"devices" => []} = fetch(ctx.conn, ctx.bob, ctx.alice) |> json_response(200)
+      no_keys = session_fixture(keys: false)
+
+      assert %{"devices" => []} = fetch(ctx.conn, ctx.bob, no_keys) |> json_response(200)
     end
 
     test "is not found for an unknown or malformed user", ctx do

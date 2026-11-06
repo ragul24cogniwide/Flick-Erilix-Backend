@@ -15,8 +15,8 @@ defmodule LoadTest.Client do
   def start(args), do: GenServer.start(__MODULE__, args)
   def connect_and_join(pid), do: GenServer.call(pid, :connect_and_join, 120_000)
 
-  def send_message(pid, conversation_id),
-    do: GenServer.cast(pid, {:send_message, conversation_id})
+  def send_message(pid, conversation_id, peer_device_id),
+    do: GenServer.cast(pid, {:send_message, conversation_id, peer_device_id})
 
   @impl true
   def init(args) do
@@ -49,14 +49,19 @@ defmodule LoadTest.Client do
   end
 
   @impl true
-  def handle_cast({:send_message, conversation_id}, state) do
+  def handle_cast({:send_message, conversation_id, peer_device_id}, state) do
     ref = Integer.to_string(state.ref)
     sent_at = System.monotonic_time(:microsecond)
 
     payload = %{
       conversation_id: conversation_id,
       client_msg_id: "#{state.session.device.id}-#{ref}",
-      ciphertext: Base.encode64(<<sent_at::signed-64, state.padding::binary>>),
+      ciphertexts: [
+        %{
+          device_id: peer_device_id,
+          ciphertext: Base.encode64(<<sent_at::signed-64, state.padding::binary>>)
+        }
+      ],
       kind: "text"
     }
 
@@ -185,7 +190,8 @@ defmodule LoadTest do
   alias ChatServer.Accounts.{Device, User}
   alias ChatServer.Conversations
   alias ChatServer.Conversations.Conversation
-  alias ChatServer.Messaging.{Delivery, Message}
+  alias ChatServer.Keys
+  alias ChatServer.Messaging.Delivery
   alias ChatServer.Repo
 
   @phone_prefix "+1999"
@@ -234,7 +240,7 @@ defmodule LoadTest do
 
     {total_us, _} =
       :timer.tc(fn ->
-        send_all(clients, conversations, messages, interval)
+        send_all(clients, sessions, conversations, messages, interval)
         wait_for(tables, expected, 180_000)
       end)
 
@@ -264,6 +270,14 @@ defmodule LoadTest do
       fn i ->
         phone = @phone_prefix <> String.pad_leading(Integer.to_string(i), 8, "0")
         {:ok, session} = Accounts.start_session(phone, changeset)
+
+        {:ok, _available} =
+          Keys.upload_keys(session.device, %{
+            "identity_public_key" => Base.encode64("identity"),
+            "signed_prekey" => Base.encode64("signed"),
+            "signed_prekey_signature" => Base.encode64("signature")
+          })
+
         session
       end,
       max_concurrency: 10,
@@ -306,23 +320,29 @@ defmodule LoadTest do
     |> Enum.map(fn {:ok, result} -> result end)
   end
 
-  defp send_all(clients, conversations, messages, interval) do
+  defp send_all(clients, sessions, conversations, messages, interval) do
     clients
+    |> Enum.zip(sessions)
     |> Enum.chunk_every(2)
     |> Enum.zip(conversations)
-    |> Enum.flat_map(fn {pair, conversation} ->
-      Enum.map(pair, fn {client, _status} ->
-        Task.async(fn ->
-          Process.sleep(:rand.uniform(interval))
-
-          for _ <- 1..messages do
-            LoadTest.Client.send_message(client, conversation.id)
-            Process.sleep(interval)
-          end
-        end)
-      end)
+    |> Enum.flat_map(fn {[{first, first_session}, {second, second_session}], conversation} ->
+      [
+        sender_task(first, conversation, second_session, messages, interval),
+        sender_task(second, conversation, first_session, messages, interval)
+      ]
     end)
     |> Task.await_many(:infinity)
+  end
+
+  defp sender_task({client, _status}, conversation, peer, messages, interval) do
+    Task.async(fn ->
+      Process.sleep(:rand.uniform(interval))
+
+      for _ <- 1..messages do
+        LoadTest.Client.send_message(client, conversation.id, peer.device.id)
+        Process.sleep(interval)
+      end
+    end)
   end
 
   defp wait_for(tables, expected, timeout) when timeout > 0 do
@@ -344,7 +364,7 @@ defmodule LoadTest do
     pending =
       Repo.aggregate(from(d in Delivery, where: is_nil(d.delivered_at)), :count)
 
-    held = Repo.aggregate(from(m in Message, where: not is_nil(m.ciphertext)), :count)
+    held = Repo.aggregate(from(d in Delivery, where: not is_nil(d.ciphertext)), :count)
 
     IO.puts("""
 

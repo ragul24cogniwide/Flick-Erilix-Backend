@@ -32,8 +32,6 @@ defmodule ChatServerWeb.ReceiptsTest do
     count
   end
 
-  defp stored_ciphertext(message), do: Repo.get!(Message, message.id).ciphertext
-
   describe "msg:ack_delivered" do
     test "sets delivered_at and sends the sender receipt:delivered", ctx do
       _alice = join_device(ctx.alice)
@@ -89,7 +87,7 @@ defmodule ChatServerWeb.ReceiptsTest do
 
       refute delivery(message, ctx.bob).delivered_at
       refute_push "receipt:delivered", _payload
-      assert stored_ciphertext(message)
+      assert delivery(message, ctx.bob).ciphertext
     end
 
     test "acking from the sender's other device sends no tick", ctx do
@@ -118,17 +116,18 @@ defmodule ChatServerWeb.ReceiptsTest do
   end
 
   describe "clearing ciphertext" do
-    test "happens only once every recipient device has the message", ctx do
-      phone = session_fixture(phone: ctx.bob.user.phone)
-      tablet = join_device(phone)
+    test "each device's copy is cleared as soon as that device has it", ctx do
+      second_bob = session_fixture(phone: ctx.bob.user.phone)
       bob = join_device(ctx.bob)
       message = message_fixture(ctx.alice, ctx.conversation)
 
-      ack_delivered(bob, [message.id])
-      assert stored_ciphertext(message)
+      assert delivery(message, ctx.bob).ciphertext
+      assert delivery(message, second_bob).ciphertext
 
-      ack_delivered(tablet, [message.id])
-      refute stored_ciphertext(message)
+      ack_delivered(bob, [message.id])
+
+      refute delivery(message, ctx.bob).ciphertext
+      assert delivery(message, second_bob).ciphertext
     end
 
     test "keeps the metadata by default", ctx do
@@ -142,29 +141,29 @@ defmodule ChatServerWeb.ReceiptsTest do
       assert delivery(message, ctx.bob).delivered_at
     end
 
-    test "deletes the whole row when configured to", ctx do
+    test "deletes the row once all devices have it, when configured to", ctx do
       Application.put_env(:chat_server, :delivered_message_retention, :delete_row)
       on_exit(fn -> Application.delete_env(:chat_server, :delivered_message_retention) end)
 
+      second_bob = session_fixture(phone: ctx.bob.user.phone)
       bob = join_device(ctx.bob)
+      second = join_device(second_bob)
       message = message_fixture(ctx.alice, ctx.conversation)
 
       ack_delivered(bob, [message.id])
+      assert Repo.get(Message, message.id)
 
+      ack_delivered(second, [message.id])
       refute Repo.get(Message, message.id)
       assert Repo.aggregate(Delivery, :count) == 0
     end
 
-    test "a device logging out stops holding up the message and drops its queue", ctx do
-      phone = session_fixture(phone: ctx.bob.user.phone)
-      bob = join_device(ctx.bob)
+    test "a device logging out drops its queue", ctx do
       message = message_fixture(ctx.alice, ctx.conversation)
-      ack_delivered(bob, [message.id])
-      assert stored_ciphertext(message)
 
-      :ok = Accounts.logout(phone.device)
+      :ok = Accounts.logout(ctx.bob.device)
 
-      refute stored_ciphertext(message)
+      assert Repo.aggregate(from(d in Delivery, where: d.message_id == ^message.id), :count) == 0
     end
 
     test "removing a member drops their queue, so nothing reaches them afterwards", ctx do
@@ -178,7 +177,7 @@ defmodule ChatServerWeb.ReceiptsTest do
       _bob = join_device(ctx.bob)
 
       refute_push "msg:new", %{message_id: ^message_id}
-      refute stored_ciphertext(message)
+      assert Repo.aggregate(from(d in Delivery, where: d.message_id == ^message.id), :count) == 0
     end
   end
 
@@ -212,7 +211,7 @@ defmodule ChatServerWeb.ReceiptsTest do
       ack_read(bob, ctx.conversation, message)
 
       assert delivery(message, ctx.bob).delivered_at
-      refute stored_ciphertext(message)
+      refute delivery(message, ctx.bob).ciphertext
     end
 
     test "still works after delivery cleared the ciphertext", ctx do

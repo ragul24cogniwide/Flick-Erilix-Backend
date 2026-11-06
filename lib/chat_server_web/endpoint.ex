@@ -14,8 +14,9 @@ defmodule ChatServerWeb.Endpoint do
   socket "/socket", ChatServerWeb.UserSocket,
     websocket: [
       connect_info: [:peer_data, :x_headers],
-      # Room for a 64 KB message once base64-encoded and wrapped in the envelope.
-      max_frame_size: 128 * 1024
+      # Room for 3 MiB of ciphertext (one copy per device) once base64-encoded and
+      # wrapped in the envelope. Messaging enforces the actual limits.
+      max_frame_size: 5 * 1024 * 1024
     ],
     longpoll: false
 

@@ -39,8 +39,8 @@ config :chat_server, :rate_limits,
   contacts_match_user: {10, 60},
   keys_fetch_user: {30, 60}
 
-# What happens to a message once every recipient device has it:
-# :keep_metadata clears the ciphertext only, :delete_row removes the message.
+# What happens to a message once every recipient device has it. Each device's ciphertext
+# is cleared on receipt either way. :keep_metadata keeps the message row and receipts,
 config :chat_server, :delivered_message_retention, :keep_metadata
 
 # Configure the endpoint

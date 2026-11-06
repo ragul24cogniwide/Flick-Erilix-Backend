@@ -205,6 +205,10 @@ defmodule ChatServerWeb.UserChannel do
     if batch.next_cursor, do: flush_pending(socket, batch.next_cursor), else: socket
   end
 
+  defp error_payload({:device_mismatch, %{missing: missing, extra: extra}}) do
+    %{reason: "device_mismatch", missing: missing, extra: extra}
+  end
+
   defp error_payload(%Ecto.Changeset{} = changeset) do
     fields = changeset.errors |> Keyword.keys() |> Enum.uniq()
     %{reason: "invalid_payload", fields: fields}

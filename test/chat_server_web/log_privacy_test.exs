@@ -63,7 +63,13 @@ defmodule ChatServerWeb.LogPrivacyTest do
         channel = join_device(alice)
         _bob = join_device(bob)
 
-        ref = push(channel, "msg:send", send_params(conversation, %{"ciphertext" => ciphertext}))
+        ref =
+          push(
+            channel,
+            "msg:send",
+            send_params(alice, conversation, %{"ciphertext" => ciphertext})
+          )
+
         assert_reply ref, :ok, %{message_id: message_id}
 
         assert_push "msg:new", %{message_id: ^message_id}

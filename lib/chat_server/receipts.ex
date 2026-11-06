@@ -13,8 +13,8 @@ defmodule ChatServer.Receipts do
   @max_ack_batch 500
 
   @doc """
-  Marks messages delivered to this device and tells their senders. Only the device's
-  own delivery rows can change, so acking someone else's message does nothing.
+  Marks messages delivered to this device, clears its ciphertext, and tells the senders.
+  Only the device's own rows can change, so acking someone else's message does nothing.
   """
   def mark_delivered(%User{} = user, %Device{} = device, params) do
     with {:ok, %{message_ids: message_ids}} <- validate_delivered(params) do
@@ -27,7 +27,7 @@ defmodule ChatServer.Receipts do
             where: d.message_id in ^message_ids and is_nil(d.delivered_at),
             select: d.message_id
           ),
-          set: [delivered_at: now]
+          set: [delivered_at: now, ciphertext: nil]
         )
 
       senders =
@@ -37,7 +37,7 @@ defmodule ChatServer.Receipts do
 
       # Runs after the update commits, never inside one transaction with it. Two devices
       # acking at once would each miss the other's uncommitted row, and neither would
-      # clear the ciphertext.
+      # release the message.
       Messaging.release_delivered(acked_ids)
 
       {:ok, acked_ids}
@@ -72,7 +72,8 @@ defmodule ChatServer.Receipts do
             update: [
               set: [
                 read_at: ^now,
-                delivered_at: fragment("COALESCE(?, ?)", d.delivered_at, ^now)
+                delivered_at: fragment("COALESCE(?, ?)", d.delivered_at, ^now),
+                ciphertext: nil
               ]
             ],
             select: {m.id, m.sender_id}

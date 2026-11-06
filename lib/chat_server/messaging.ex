@@ -7,6 +7,7 @@ defmodule ChatServer.Messaging do
   alias ChatServer.Accounts.{Device, User}
   alias ChatServer.Conversations
   alias ChatServer.Conversations.Member
+  alias ChatServer.Keys.IdentityKey
   alias ChatServer.Messaging.{Delivery, Message}
   alias ChatServer.{Realtime, Repo}
   alias ChatServer.Workers.PushNotification
@@ -15,22 +16,26 @@ defmodule ChatServer.Messaging do
   alias Ecto.Multi
 
   @max_ciphertext_bytes 64 * 1024
+  # One send carries a copy per device. Together these must fit the socket's frame limit.
+  @max_total_ciphertext_bytes 3 * 1024 * 1024
   @max_client_msg_id_length 64
   @default_page_size 50
   @max_page_size 100
   @pending_batch_size 200
   @undelivered_retention_days 30
 
-  def max_ciphertext_bytes, do: @max_ciphertext_bytes
-
   ## Sending
 
   @doc """
-  Validates and stores a message with one delivery row per recipient device.
+  Validates and stores a message, with one delivery row and ciphertext per device.
 
-  A recipient device is any signed-in device of any member except the one sending,
-  so the sender's other devices stay in sync. Retrying a `client_msg_id` returns the
-  original message with `duplicate?: true` and creates nothing.
+  The sender must supply a ciphertext for exactly the devices that should receive it:
+  every signed-in device with uploaded keys, of every member, except the one sending. If
+  the list is out of date this returns `{:error, {:device_mismatch, details}}` and stores
+  nothing, so the client can fetch the missing devices' keys, re-encrypt, and retry.
+
+  Retrying a `client_msg_id` returns the original message with `duplicate?: true`, even
+  if the conversation's devices have changed since.
   """
   def send_message(%User{} = user, %Device{} = device, params) do
     with {:ok, attrs} <- validate_send(params),
@@ -40,68 +45,120 @@ defmodule ChatServer.Messaging do
         sender_id: user.id,
         sender_device_id: device.id,
         client_msg_id: attrs.client_msg_id,
-        ciphertext: attrs.ciphertext,
         kind: String.to_existing_atom(attrs.kind)
       }
 
-      {:ok, %{message: message, fan_out: fan_out}} =
-        Multi.new()
-        |> Multi.insert(:inserted, new,
-          on_conflict: :nothing,
-          conflict_target: [:sender_id, :client_msg_id]
+      Multi.new()
+      |> Multi.one(
+        :existing,
+        from(m in Message,
+          where: m.sender_id == ^user.id and m.client_msg_id == ^attrs.client_msg_id
         )
-        |> Multi.run(:message, fn repo, _changes ->
-          {:ok, repo.get_by!(Message, sender_id: user.id, client_msg_id: attrs.client_msg_id)}
-        end)
-        |> Multi.run(:fan_out, &fan_out(&1, &2, device.id))
-        |> Repo.transaction()
+      )
+      |> Multi.run(:recipients, &check_recipients(&1, &2, new, attrs.ciphertexts))
+      |> Multi.run(:stored, &store_message(&1, &2, new, attrs.ciphertexts))
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{stored: {message, fan_out}}} ->
+          route(message, fan_out, attrs.ciphertexts)
+          {:ok, message, fan_out}
 
-      route(message, fan_out)
-      {:ok, message, fan_out}
+        {:error, :recipients, mismatch, _changes} ->
+          {:error, {:device_mismatch, mismatch}}
+      end
     end
   end
 
-  # When the insert hit the unique index, the row we read back is the original and
-  # its id differs from the one generated for this attempt.
-  defp fan_out(_repo, %{inserted: %{id: id}, message: %{id: original_id}}, _device_id)
-       when id != original_id do
-    {:ok, %{duplicate?: true, recipient_device_ids: [], recipient_user_ids: []}}
+  @doc "The `{device_id, user_id}` of every device a new message must be encrypted for."
+  def recipient_devices(repo \\ Repo, conversation_id, sending_device_id) do
+    repo.all(
+      from d in Device,
+        as: :device,
+        join: m in Member,
+        on: m.user_id == d.user_id,
+        # A device with no keys cannot be encrypted for, so it is not a recipient.
+        join: k in IdentityKey,
+        on: k.device_id == d.id,
+        where: m.conversation_id == ^conversation_id,
+        where: d.id != ^sending_device_id,
+        where: exists(Accounts.active_session_query()),
+        select: {d.id, d.user_id}
+    )
   end
 
-  defp fan_out(repo, %{message: message}, sending_device_id) do
-    recipient_devices =
-      repo.all(
-        from d in Device,
-          as: :device,
-          join: m in Member,
-          on: m.user_id == d.user_id,
-          where: m.conversation_id == ^message.conversation_id,
-          where: d.id != ^sending_device_id,
-          where: exists(Accounts.active_session_query()),
-          select: {d.id, d.user_id}
-      )
+  defp check_recipients(_repo, %{existing: %Message{}}, _new, _ciphertexts), do: {:ok, []}
 
-    {device_ids, user_ids} = Enum.unzip(recipient_devices)
-    rows = Enum.map(device_ids, &%{message_id: message.id, recipient_device_id: &1})
-    repo.insert_all(Delivery, rows)
+  defp check_recipients(repo, _changes, new, ciphertexts) do
+    recipients = recipient_devices(repo, new.conversation_id, new.sender_device_id)
+    recipient_ids = MapSet.new(recipients, &elem(&1, 0))
 
-    {:ok,
-     %{
-       duplicate?: false,
-       recipient_device_ids: device_ids,
-       recipient_user_ids: Enum.uniq(user_ids)
-     }}
+    missing =
+      for {device_id, user_id} <- recipients, not is_map_key(ciphertexts, device_id) do
+        %{device_id: device_id, user_id: user_id}
+      end
+
+    extra = for {device_id, _bytes} <- ciphertexts, device_id not in recipient_ids, do: device_id
+
+    if missing == [] and extra == [] do
+      {:ok, recipients}
+    else
+      {:error, %{missing: missing, extra: extra}}
+    end
+  end
+
+  defp store_message(_repo, %{existing: %Message{} = existing}, _new, _ciphertexts) do
+    {:ok, {existing, duplicate_fan_out()}}
+  end
+
+  defp store_message(repo, %{recipients: recipients}, new, ciphertexts) do
+    {:ok, inserted} =
+      repo.insert(new, on_conflict: :nothing, conflict_target: [:sender_id, :client_msg_id])
+
+    stored = repo.get_by!(Message, sender_id: new.sender_id, client_msg_id: new.client_msg_id)
+
+    # When a concurrent retry won the unique index, the row read back is the original,
+    # and its id differs from the one generated for this attempt.
+    if stored.id == inserted.id do
+      {device_ids, user_ids} = Enum.unzip(recipients)
+
+      rows =
+        Enum.map(device_ids, fn device_id ->
+          %{
+            message_id: stored.id,
+            recipient_device_id: device_id,
+            ciphertext: Map.fetch!(ciphertexts, device_id)
+          }
+        end)
+
+      repo.insert_all(Delivery, rows)
+
+      {:ok,
+       {stored,
+        %{
+          duplicate?: false,
+          recipient_device_ids: device_ids,
+          recipient_user_ids: Enum.uniq(user_ids)
+        }}}
+    else
+      {:ok, {stored, duplicate_fan_out()}}
+    end
+  end
+
+  defp duplicate_fan_out do
+    %{duplicate?: true, recipient_device_ids: [], recipient_user_ids: []}
   end
 
   # Runs after commit, so a receiver can always find what it is told about. A device
   # with no socket has no subscriber: its delivery row stays pending until it returns.
-  defp route(_message, %{duplicate?: true}), do: :ok
+  defp route(_message, %{duplicate?: true}, _ciphertexts), do: :ok
 
-  defp route(message, %{recipient_device_ids: device_ids, recipient_user_ids: user_ids}) do
-    payload = MessageJSON.message(message)
-    Enum.each(device_ids, &Realtime.broadcast_to_device(&1, "msg:new", payload))
+  defp route(message, %{recipient_device_ids: device_ids} = fan_out, ciphertexts) do
+    Enum.each(device_ids, fn device_id ->
+      payload = MessageJSON.message(%{message | ciphertext: Map.fetch!(ciphertexts, device_id)})
+      Realtime.broadcast_to_device(device_id, "msg:new", payload)
+    end)
 
-    online = Realtime.online_device_ids(user_ids)
+    online = Realtime.online_device_ids(fan_out.recipient_user_ids)
     device_ids |> Enum.reject(&MapSet.member?(online, &1)) |> PushNotification.enqueue()
   end
 
@@ -109,7 +166,7 @@ defmodule ChatServer.Messaging do
     types = %{
       conversation_id: Ecto.UUID,
       client_msg_id: :string,
-      ciphertext: :string,
+      ciphertexts: {:array, :map},
       kind: :string
     }
 
@@ -120,32 +177,59 @@ defmodule ChatServer.Messaging do
       |> Changeset.validate_length(:client_msg_id, max: @max_client_msg_id_length)
       # `system` messages are reserved for the server, so clients cannot forge them.
       |> Changeset.validate_inclusion(:kind, ["text", "media_ref"])
-      |> decode_ciphertext()
 
-    with {:ok, attrs} <- Changeset.apply_action(changeset, :validate),
-         true <- byte_size(attrs.ciphertext) <= @max_ciphertext_bytes || :too_large do
-      {:ok, attrs}
-    else
-      :too_large -> {:error, :message_too_large}
-      {:error, changeset} -> {:error, changeset}
+    with {:ok, attrs} <- Changeset.apply_action(changeset, :validate) do
+      case decode_ciphertexts(attrs.ciphertexts) do
+        {:ok, ciphertexts} ->
+          {:ok, %{attrs | ciphertexts: ciphertexts}}
+
+        :invalid ->
+          changeset
+          |> Changeset.add_error(:ciphertexts, "must be device ids with non-empty base64")
+          |> Changeset.apply_action(:validate)
+
+        :too_large ->
+          {:error, :message_too_large}
+      end
     end
   end
 
-  defp decode_ciphertext(changeset) do
-    Changeset.update_change(changeset, :ciphertext, fn encoded ->
-      case Base.decode64(encoded) do
-        {:ok, decoded} -> decoded
-        :error -> nil
-      end
-    end)
-    |> Changeset.validate_required([:ciphertext], message: "must be non-empty base64")
+  defp decode_ciphertexts(entries) do
+    decoded = Enum.map(entries, &decode_ciphertext/1)
+
+    cond do
+      Enum.any?(decoded, &(&1 == :invalid)) -> :invalid
+      length(Enum.uniq_by(decoded, &elem(&1, 0))) != length(decoded) -> :invalid
+      too_large?(decoded) -> :too_large
+      true -> {:ok, Map.new(decoded)}
+    end
+  end
+
+  defp decode_ciphertext(%{"device_id" => device_id, "ciphertext" => encoded})
+       when is_binary(encoded) do
+    with {:ok, device_id} <- Ecto.UUID.cast(device_id),
+         {:ok, bytes} when bytes != "" <- Base.decode64(encoded) do
+      {device_id, bytes}
+    else
+      _invalid -> :invalid
+    end
+  end
+
+  defp decode_ciphertext(_entry), do: :invalid
+
+  defp too_large?(decoded) do
+    sizes = Enum.map(decoded, fn {_device_id, bytes} -> byte_size(bytes) end)
+
+    Enum.any?(sizes, &(&1 > @max_ciphertext_bytes)) or
+      Enum.sum(sizes) > @max_total_ciphertext_bytes
   end
 
   ## Releasing
 
   @doc """
-  Clears any of these messages that no recipient device is still waiting for. By
-  config this drops either the ciphertext (`:keep_metadata`) or the row (`:delete_row`).
+  With `:delete_row` retention, deletes any of these messages that no device is still
+  waiting for. With `:keep_metadata` there is nothing to do, because each device's
+  ciphertext was already cleared when it received the message.
 
   With `:delete_row` the delivery rows go too, so a read receipt can no longer be
   recorded once a message has been fully delivered.
@@ -153,18 +237,20 @@ defmodule ChatServer.Messaging do
   def release_delivered([]), do: :ok
 
   def release_delivered(message_ids) do
-    releasable =
-      from m in Message,
-        as: :message,
-        where: m.id in ^message_ids and not is_nil(m.ciphertext),
-        where: not exists(undelivered_query())
-
     case Application.get_env(:chat_server, :delivered_message_retention, :keep_metadata) do
-      :keep_metadata -> Repo.update_all(releasable, set: [ciphertext: nil])
-      :delete_row -> Repo.delete_all(releasable)
-    end
+      :keep_metadata ->
+        :ok
 
-    :ok
+      :delete_row ->
+        Repo.delete_all(
+          from m in Message,
+            as: :message,
+            where: m.id in ^message_ids,
+            where: not exists(undelivered_query())
+        )
+
+        :ok
+    end
   end
 
   defp undelivered_query do
@@ -197,16 +283,16 @@ defmodule ChatServer.Messaging do
     release_delivered(message_ids)
   end
 
-  @doc """
-  Drops messages that some device still has not received after 30 days. Delivered
-  messages have no ciphertext left, so they do not match.
-  """
+  @doc "Drops messages that some device still has not received after 30 days."
   def drop_expired_messages do
     cutoff = DateTime.add(DateTime.utc_now(), -@undelivered_retention_days, :day)
 
     {count, _rows} =
       Repo.delete_all(
-        from m in Message, where: not is_nil(m.ciphertext) and m.inserted_at < ^cutoff
+        from m in Message,
+          as: :message,
+          where: m.inserted_at < ^cutoff,
+          where: exists(undelivered_query())
       )
 
     count
@@ -229,10 +315,10 @@ defmodule ChatServer.Messaging do
       from(d in Delivery,
         join: m in assoc(d, :message),
         where: d.recipient_device_id == ^device_id and is_nil(d.delivered_at),
-        where: not is_nil(m.ciphertext),
+        where: not is_nil(d.ciphertext),
         order_by: [asc: m.inserted_at, asc: m.id],
         limit: @pending_batch_size,
-        select: m
+        select: %{m | ciphertext: d.ciphertext}
       )
       |> after_cursor(cursor)
       |> Repo.all()
@@ -260,24 +346,23 @@ defmodule ChatServer.Messaging do
   end
 
   @doc """
-  Pages through messages the server still holds, newest first.
-
-  Only messages the user sent or was a recipient of are visible, so someone added to
-  a group later cannot read what was sent before they joined.
+  Pages through what the server still holds for this device, newest first. A device can
+  only read its own copies, so someone added to a group later cannot see earlier messages.
   """
-  def list_messages(%User{} = user, conversation_id, params) do
+  def list_messages(%User{} = user, %Device{} = device, conversation_id, params) do
     with {:ok, conversation_id} <- cast_conversation_id(conversation_id),
          true <- Conversations.member?(conversation_id, user.id) || {:error, :forbidden},
          {:ok, cursor} <- decode_cursor(params["cursor"]) do
       limit = page_size(params["limit"])
 
       messages =
-        from(m in Message,
-          as: :message,
-          where: m.conversation_id == ^conversation_id and not is_nil(m.ciphertext),
-          where: m.sender_id == ^user.id or exists(visible_delivery_query(user.id)),
+        from(d in Delivery,
+          join: m in assoc(d, :message),
+          where: d.recipient_device_id == ^device.id and not is_nil(d.ciphertext),
+          where: m.conversation_id == ^conversation_id,
           order_by: [desc: m.inserted_at, desc: m.id],
-          limit: ^(limit + 1)
+          limit: ^(limit + 1),
+          select: %{m | ciphertext: d.ciphertext}
         )
         |> before_cursor(cursor)
         |> Repo.all()
@@ -288,18 +373,10 @@ defmodule ChatServer.Messaging do
     end
   end
 
-  defp visible_delivery_query(user_id) do
-    from d in Delivery,
-      join: device in Device,
-      on: device.id == d.recipient_device_id,
-      where: d.message_id == parent_as(:message).id and device.user_id == ^user_id,
-      select: 1
-  end
-
   defp before_cursor(query, nil), do: query
 
   defp before_cursor(query, {inserted_at, id}) do
-    from m in query,
+    from [_d, m] in query,
       where:
         fragment(
           "(?, ?) < (?, ?)",

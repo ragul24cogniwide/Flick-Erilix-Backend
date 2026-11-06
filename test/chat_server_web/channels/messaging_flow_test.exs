@@ -26,7 +26,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
       bob_id = "user:#{ctx.bob.user.id}"
       ciphertext = Base.encode64("sealed")
 
-      params = send_params(ctx.conversation, %{"ciphertext" => ciphertext})
+      params = send_params(ctx.alice, ctx.conversation, %{"ciphertext" => ciphertext})
       ref = push(alice, "msg:send", params)
 
       assert_reply ref, :ok, %{message_id: message_id, server_ts: %DateTime{}}
@@ -53,7 +53,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
       _bob = join_device(ctx.bob)
       _second_bob = join_device(second_bob)
 
-      ref = push(alice, "msg:send", send_params(ctx.conversation))
+      ref = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
       assert_reply ref, :ok, %{message_id: message_id}
 
       assert new_messages_received() == [message_id, message_id]
@@ -64,7 +64,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
       alice = join_device(ctx.alice)
       _tablet = join_device(tablet)
 
-      ref = push(alice, "msg:send", send_params(ctx.conversation))
+      ref = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
       assert_reply ref, :ok, %{message_id: message_id}
 
       assert new_messages_received() == [message_id]
@@ -77,10 +77,93 @@ defmodule ChatServerWeb.MessagingFlowTest do
       _bob = join_device(ctx.bob)
       _carol = join_device(carol)
 
-      ref = push(alice, "msg:send", send_params(group))
+      ref = push(alice, "msg:send", send_params(ctx.alice, group))
       assert_reply ref, :ok, %{message_id: message_id}
 
       assert new_messages_received() == [message_id, message_id]
+    end
+  end
+
+  describe "per-device encryption" do
+    test "each device receives only its own ciphertext", ctx do
+      second_bob = session_fixture(phone: ctx.bob.user.phone)
+      alice = join_device(ctx.alice)
+      _bob = join_device(ctx.bob)
+      _second_bob = join_device(second_bob)
+
+      for_first = Base.encode64("for first device")
+      for_second = Base.encode64("for second device")
+
+      ref =
+        push(
+          alice,
+          "msg:send",
+          send_params(ctx.alice, ctx.conversation, %{
+            "ciphertexts" => [
+              %{"device_id" => ctx.bob.device.id, "ciphertext" => for_first},
+              %{"device_id" => second_bob.device.id, "ciphertext" => for_second}
+            ]
+          })
+        )
+
+      assert_reply ref, :ok, _reply
+
+      assert_push "msg:new", %{ciphertext: first}
+      assert_push "msg:new", %{ciphertext: second}
+      assert Enum.sort([first, second]) == Enum.sort([for_first, for_second])
+    end
+
+    test "an offline device gets its own ciphertext from the queue", ctx do
+      alice = join_device(ctx.alice)
+      mine = Base.encode64("for bob")
+
+      ref =
+        push(alice, "msg:send", send_params(ctx.alice, ctx.conversation, %{"ciphertext" => mine}))
+
+      assert_reply ref, :ok, _reply
+
+      _bob = join_device(ctx.bob)
+
+      assert_push "msg:new", %{ciphertext: ^mine}
+    end
+
+    test "a stale device list is refused, naming what to fix, and stores nothing", ctx do
+      alice = join_device(ctx.alice)
+      params = send_params(ctx.alice, ctx.conversation)
+      new_device = session_fixture(phone: ctx.bob.user.phone)
+
+      ref = push(alice, "msg:send", params)
+
+      assert_reply ref, :error, %{reason: "device_mismatch", missing: missing, extra: []}
+      assert missing == [%{device_id: new_device.device.id, user_id: ctx.bob.user.id}]
+      assert Repo.aggregate(Message, :count) == 0
+
+      retry = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
+      assert_reply retry, :ok, _reply
+    end
+
+    test "a ciphertext for a device that left is refused as extra", ctx do
+      alice = join_device(ctx.alice)
+      params = send_params(ctx.alice, ctx.conversation)
+      gone = ctx.bob.device.id
+      :ok = ChatServer.Accounts.logout(ctx.bob.device)
+
+      ref = push(alice, "msg:send", params)
+
+      assert_reply ref, :error, %{reason: "device_mismatch", missing: [], extra: [^gone]}
+    end
+
+    test "retrying a sent message returns the original even if devices changed", ctx do
+      alice = join_device(ctx.alice)
+      params = send_params(ctx.alice, ctx.conversation)
+
+      first = push(alice, "msg:send", params)
+      assert_reply first, :ok, %{message_id: message_id}
+
+      _new_device = session_fixture(phone: ctx.bob.user.phone)
+
+      retry = push(alice, "msg:send", params)
+      assert_reply retry, :ok, %{message_id: ^message_id}
     end
   end
 
@@ -90,7 +173,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
 
       sent =
         for _ <- 1..5 do
-          ref = push(alice, "msg:send", send_params(ctx.conversation))
+          ref = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
           assert_reply ref, :ok, %{message_id: message_id}
           message_id
         end
@@ -106,13 +189,13 @@ defmodule ChatServerWeb.MessagingFlowTest do
       alice = join_device(ctx.alice)
       bob = join_device(ctx.bob)
 
-      first = push(alice, "msg:send", send_params(ctx.conversation))
+      first = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
       assert_reply first, :ok, %{message_id: first_id}
       assert new_messages_received() == [first_id]
 
       disconnect(bob)
 
-      second = push(alice, "msg:send", send_params(ctx.conversation))
+      second = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
       assert_reply second, :ok, %{message_id: second_id}
       assert new_messages_received() == []
 
@@ -158,7 +241,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
     test "a retried send returns the original result and delivers once", ctx do
       alice = join_device(ctx.alice)
       _bob = join_device(ctx.bob)
-      params = send_params(ctx.conversation)
+      params = send_params(ctx.alice, ctx.conversation)
 
       first = push(alice, "msg:send", params)
       assert_reply first, :ok, %{message_id: message_id, server_ts: server_ts}
@@ -172,7 +255,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
 
     test "a retry while the recipient is offline queues one copy", ctx do
       alice = join_device(ctx.alice)
-      params = send_params(ctx.conversation)
+      params = send_params(ctx.alice, ctx.conversation)
 
       first = push(alice, "msg:send", params)
       assert_reply first, :ok, %{message_id: message_id}
@@ -185,7 +268,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
     end
 
     test "concurrent retries create one message", ctx do
-      params = send_params(ctx.conversation)
+      params = send_params(ctx.alice, ctx.conversation)
 
       results =
         1..8
@@ -209,7 +292,7 @@ defmodule ChatServerWeb.MessagingFlowTest do
       outsider = join_device(session_fixture())
       _bob = join_device(ctx.bob)
 
-      ref = push(outsider, "msg:send", send_params(ctx.conversation))
+      ref = push(outsider, "msg:send", send_params(ctx.alice, ctx.conversation))
 
       assert_reply ref, :error, %{reason: :forbidden}
       assert new_messages_received() == []
@@ -220,12 +303,12 @@ defmodule ChatServerWeb.MessagingFlowTest do
       group = group_fixture(ctx.alice, [ctx.bob])
       bob = join_device(ctx.bob)
 
-      first = push(bob, "msg:send", send_params(group))
+      first = push(bob, "msg:send", send_params(ctx.bob, group))
       assert_reply first, :ok, _reply
 
       {:ok, _} = ChatServer.Conversations.remove_member(ctx.alice.user, group.id, ctx.bob.user.id)
 
-      second = push(bob, "msg:send", send_params(group))
+      second = push(bob, "msg:send", send_params(ctx.bob, group))
       assert_reply second, :error, %{reason: :forbidden}
     end
   end
@@ -235,7 +318,12 @@ defmodule ChatServerWeb.MessagingFlowTest do
       alice = join_device(ctx.alice)
       too_big = Base.encode64(:binary.copy(<<1>>, 64 * 1024 + 1))
 
-      ref = push(alice, "msg:send", send_params(ctx.conversation, %{"ciphertext" => too_big}))
+      ref =
+        push(
+          alice,
+          "msg:send",
+          send_params(ctx.alice, ctx.conversation, %{"ciphertext" => too_big})
+        )
 
       assert_reply ref, :error, %{reason: :message_too_large}
     end
@@ -244,9 +332,13 @@ defmodule ChatServerWeb.MessagingFlowTest do
       alice = join_device(ctx.alice)
 
       ref =
-        push(alice, "msg:send", send_params(ctx.conversation, %{"ciphertext" => "not base64!"}))
+        push(
+          alice,
+          "msg:send",
+          send_params(ctx.alice, ctx.conversation, %{"ciphertext" => "not base64!"})
+        )
 
-      assert_reply ref, :error, %{reason: "invalid_payload", fields: [:ciphertext]}
+      assert_reply ref, :error, %{reason: "invalid_payload", fields: [:ciphertexts]}
     end
 
     test "an unknown event gets an error, not a crash", ctx do
@@ -275,10 +367,10 @@ defmodule ChatServerWeb.MessagingFlowTest do
 
       alice = join_device(ctx.alice)
 
-      first = push(alice, "msg:send", send_params(ctx.conversation))
+      first = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
       assert_reply first, :ok, _reply
 
-      second = push(alice, "msg:send", send_params(ctx.conversation))
+      second = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
       assert_reply second, :error, %{reason: "rate_limited", retry_after: retry_after}
       assert retry_after in 1..60
     end
@@ -294,10 +386,10 @@ defmodule ChatServerWeb.MessagingFlowTest do
       alice = join_device(ctx.alice, shared_ip)
       bob = join_device(ctx.bob, shared_ip)
 
-      first = push(alice, "msg:send", send_params(ctx.conversation))
+      first = push(alice, "msg:send", send_params(ctx.alice, ctx.conversation))
       assert_reply first, :ok, _reply
 
-      second = push(bob, "msg:send", send_params(ctx.conversation))
+      second = push(bob, "msg:send", send_params(ctx.bob, ctx.conversation))
       assert_reply second, :error, %{reason: "rate_limited"}
     end
   end

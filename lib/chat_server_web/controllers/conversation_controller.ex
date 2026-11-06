@@ -45,7 +45,12 @@ defmodule ChatServerWeb.ConversationController do
 
   def messages(conn, %{"id" => id} = params) do
     with {:ok, messages, next_cursor} <-
-           Messaging.list_messages(conn.assigns.current_user, id, params) do
+           Messaging.list_messages(
+             conn.assigns.current_user,
+             conn.assigns.current_device,
+             id,
+             params
+           ) do
       json(conn, %{
         messages: Enum.map(messages, &MessageJSON.message/1),
         next_cursor: next_cursor

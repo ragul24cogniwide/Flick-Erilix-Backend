@@ -41,7 +41,7 @@ defmodule ChatServer.Workers.PushNotificationTest do
     end
 
     test "a retried send adds no push beyond the first", ctx do
-      params = send_params(ctx.conversation)
+      params = send_params(ctx.alice, ctx.conversation)
 
       {:ok, _, _} = ChatServer.Messaging.send_message(ctx.alice.user, ctx.alice.device, params)
       Repo.delete_all(Oban.Job)

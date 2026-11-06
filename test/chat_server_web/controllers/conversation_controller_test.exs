@@ -288,6 +288,16 @@ defmodule ChatServerWeb.ConversationControllerTest do
                ctx.conn |> as(ctx.carol) |> get(messages_path(group)) |> json_response(200)
     end
 
+    test "a sending device holds no copy of what it sent", ctx do
+      message_fixture(ctx.alice, ctx.conversation)
+
+      assert %{"messages" => []} =
+               ctx.conn
+               |> as(ctx.alice)
+               |> get(messages_path(ctx.conversation))
+               |> json_response(200)
+    end
+
     test "returns ciphertext as sent", ctx do
       bytes = :crypto.strong_rand_bytes(32)
 
@@ -339,7 +349,10 @@ defmodule ChatServerWeb.ConversationControllerTest do
 
     test "hides messages whose ciphertext was cleared", ctx do
       message = message_fixture(ctx.alice, ctx.conversation)
-      Repo.update_all(from(m in Message, where: m.id == ^message.id), set: [ciphertext: nil])
+
+      Repo.update_all(from(d in Delivery, where: d.message_id == ^message.id),
+        set: [ciphertext: nil]
+      )
 
       assert %{"messages" => []} =
                ctx.conn

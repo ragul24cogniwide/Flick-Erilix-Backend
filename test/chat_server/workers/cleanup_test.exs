@@ -37,7 +37,8 @@ defmodule ChatServer.Workers.CleanupTest do
 
     assert :ok = perform_job(Cleanup, %{})
 
-    assert Repo.get(Message, recent.id).ciphertext
+    assert Repo.get(Message, recent.id)
+    assert Repo.aggregate(from(d in Delivery, where: not is_nil(d.ciphertext)), :count) == 1
   end
 
   test "keeps the metadata of old messages that were delivered", ctx do

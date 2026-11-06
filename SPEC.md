@@ -2,6 +2,8 @@
 
 A WhatsApp-style messaging backend in Elixir and Phoenix. Save this as SPEC.md in an empty project folder, open Claude Code there, and paste the starter prompt from the last section.
 
+> **Changed after the original spec:** each recipient device now gets its own ciphertext, stored on its delivery row, so that standard pairwise Signal encryption works. Sections 3, 5, and 6 reflect this.
+
 ## 1. Goal and scope
 
 Build an MVP real-time chat server where the server is a fast router of opaque encrypted payloads, the same idea as WhatsApp.
@@ -49,10 +51,10 @@ Use UUID primary keys and UTC timestamps. Add indexes on every foreign key and o
 | one_time_prekeys | id, device_id, key_id, public_key, claimed_at | Claimed once, then marked used |
 | conversations | id, kind (direct/group), title, created_by, inserted_at | Direct chats unique per user pair |
 | conversation_members | conversation_id, user_id, role (member/admin), joined_at | Unique on (conversation_id, user_id) |
-| messages | id, conversation_id, sender_id, sender_device_id, client_msg_id, ciphertext (bytea), kind (text/media_ref/system), inserted_at | Unique on (sender_id, client_msg_id) so retries never duplicate. Index on (conversation_id, inserted_at) |
-| deliveries | message_id, recipient_device_id, delivered_at, read_at | One row per recipient device. Index on (recipient_device_id, delivered_at) where delivered_at is null |
+| messages | id, conversation_id, sender_id, sender_device_id, client_msg_id, kind (text/media_ref/system), inserted_at | Unique on (sender_id, client_msg_id) so retries never duplicate. Index on (conversation_id, inserted_at) |
+| deliveries | message_id, recipient_device_id, ciphertext (bytea), delivered_at, read_at | One row per recipient device, holding that device's own ciphertext. Index on (recipient_device_id, delivered_at) where delivered_at is null |
 
-Rule: the server never inspects ciphertext. Maximum size 64 KB per message, rejected otherwise.
+Rule: the server never inspects ciphertext. Maximum size 64 KB per device's copy and 3 MiB per send, rejected otherwise.
 
 ## 4. REST API
 
@@ -82,7 +84,7 @@ Channel `user:<user_id>` (one per connected device, joined automatically)
 
 Client to server:
 
-- `msg:send` with `{conversation_id, client_msg_id, ciphertext (base64), kind}`. Reply `{:ok, %{message_id, server_ts}}`, which is the single tick.
+- `msg:send` with `{conversation_id, client_msg_id, ciphertexts: [{device_id, ciphertext (base64)}], kind}`, with one entry for every recipient device. Reply `{:ok, %{message_id, server_ts}}`, which is the single tick. If the device list is out of date, the reply is an error with reason `device_mismatch`, `missing: [{device_id, user_id}]`, and `extra: [device_id]`, and nothing is stored.
 - `msg:ack_delivered` with `{message_ids}`
 - `msg:ack_read` with `{conversation_id, up_to_message_id}`
 - `typing:start` and `typing:stop` with `{conversation_id}`
@@ -90,7 +92,7 @@ Client to server:
 
 Server to client:
 
-- `msg:new` with the full message payload
+- `msg:new` with the full message payload, including this device's ciphertext
 - `receipt:delivered` and `receipt:read` with `{message_id, by_user_id}`
 - `typing` with `{conversation_id, user_id, state}`
 - `presence_state` and `presence_diff` from Phoenix.Presence
@@ -99,11 +101,11 @@ Authorization: a user may only send to and read from conversations where they ar
 
 ## 6. Message flow the code must implement
 
-1. The sender calls `msg:send`. The server validates membership and size, then inserts the message and one deliveries row per recipient device, in one database transaction. It replies with the single-tick ack.
+1. The sender calls `msg:send` with a ciphertext per recipient device. A recipient device is any signed-in device with uploaded keys, of any member, except the one sending. The server validates membership, size, and the device list, then inserts the message and one deliveries row per recipient device, in one database transaction. It replies with the single-tick ack.
 2. For each recipient device that is online (tracked with Presence or the Registry), broadcast `msg:new` immediately.
 3. For each device that is offline, leave the delivery pending and enqueue a push notification through the PushProvider behaviour. The push contains no message content.
 4. When a device connects or joins its channel, send all pending deliveries in order, oldest first.
-5. On `msg:ack_delivered`, set delivered_at, notify the sender with `receipt:delivered`, and when every recipient device has delivered, delete the ciphertext (keep metadata or delete the row, per config).
+5. On `msg:ack_delivered`, set delivered_at, clear that device's ciphertext, and notify the sender with `receipt:delivered`. When every recipient device has delivered, keep the metadata or delete the row, per config.
 6. On `msg:ack_read`, set read_at and notify the sender with `receipt:read`.
 7. A job runs daily and drops undelivered messages older than 30 days.
 
