@@ -270,6 +270,11 @@ defmodule ChatServer.Accounts do
     user |> User.profile_changeset(attrs) |> Repo.update()
   end
 
+  def touch_device(%Device{} = device) do
+    Repo.update_all(from(d in Device, where: d.id == ^device.id), set: [last_seen_at: now()])
+    :ok
+  end
+
   def update_push_token(%Device{} = device, attrs) do
     device |> Device.push_token_changeset(attrs) |> Repo.update()
   end

@@ -11,6 +11,14 @@ defmodule ChatServerWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  socket "/socket", ChatServerWeb.UserSocket,
+    websocket: [
+      connect_info: [:peer_data, :x_headers],
+      # Room for a 64 KB message once base64-encoded and wrapped in the envelope.
+      max_frame_size: 128 * 1024
+    ],
+    longpoll: false
+
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]

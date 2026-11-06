@@ -8,7 +8,8 @@ defmodule ChatServer.Messaging do
   alias ChatServer.Conversations
   alias ChatServer.Conversations.Member
   alias ChatServer.Messaging.{Delivery, Message}
-  alias ChatServer.Repo
+  alias ChatServer.{Realtime, Repo}
+  alias ChatServerWeb.MessageJSON
   alias Ecto.Changeset
   alias Ecto.Multi
 
@@ -16,6 +17,7 @@ defmodule ChatServer.Messaging do
   @max_client_msg_id_length 64
   @default_page_size 50
   @max_page_size 100
+  @pending_batch_size 200
 
   def max_ciphertext_bytes, do: @max_ciphertext_bytes
 
@@ -52,8 +54,16 @@ defmodule ChatServer.Messaging do
         |> Multi.run(:fan_out, &fan_out(&1, &2, device.id))
         |> Repo.transaction()
 
+      route(message, fan_out)
       {:ok, message, fan_out}
     end
+  end
+
+  # Broadcasts happen after commit, so a receiver can always find what it is told about.
+  # A device with no socket simply has no subscriber: its delivery row stays pending.
+  defp route(message, %{recipient_device_ids: device_ids}) do
+    payload = MessageJSON.message(message)
+    Enum.each(device_ids, &Realtime.broadcast_to_device(&1, "msg:new", payload))
   end
 
   # When the insert hit the unique index, the row we read back is the original and
@@ -119,6 +129,45 @@ defmodule ChatServer.Messaging do
   end
 
   ## Reading
+
+  @doc """
+  One batch of a device's undelivered messages, oldest first. Pass the returned
+  `next_cursor` to get the next batch. It is nil on the last one.
+  """
+  def pending_batch(device_id, cursor \\ nil) do
+    messages =
+      from(d in Delivery,
+        join: m in assoc(d, :message),
+        where: d.recipient_device_id == ^device_id and is_nil(d.delivered_at),
+        where: not is_nil(m.ciphertext),
+        order_by: [asc: m.inserted_at, asc: m.id],
+        limit: @pending_batch_size,
+        select: m
+      )
+      |> after_cursor(cursor)
+      |> Repo.all()
+
+    last = List.last(messages)
+
+    %{
+      messages: messages,
+      next_cursor: if(length(messages) == @pending_batch_size, do: {last.inserted_at, last.id})
+    }
+  end
+
+  defp after_cursor(query, nil), do: query
+
+  defp after_cursor(query, {inserted_at, id}) do
+    from [_d, m] in query,
+      where:
+        fragment(
+          "(?, ?) > (?, ?)",
+          m.inserted_at,
+          m.id,
+          type(^inserted_at, :utc_datetime_usec),
+          type(^id, :binary_id)
+        )
+  end
 
   @doc """
   Pages through messages the server still holds, newest first.

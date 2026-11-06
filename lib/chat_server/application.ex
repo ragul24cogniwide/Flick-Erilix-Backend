@@ -7,11 +7,14 @@ defmodule ChatServer.Application do
 
   @impl true
   def start(_type, _args) do
+    ChatServer.LogRedaction.install()
+
     children = [
       ChatServerWeb.Telemetry,
       ChatServer.Repo,
       {DNSCluster, query: Application.get_env(:chat_server, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ChatServer.PubSub},
+      ChatServerWeb.Presence,
       ChatServer.RateLimiter,
       # Start to serve requests, typically the last entry
       ChatServerWeb.Endpoint
