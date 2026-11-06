@@ -1,0 +1,17 @@
+#!/bin/sh
+# Runs a mix task in the project's toolchain container, for machines without
+# Elixir installed. MIX_ENV is inherited, and `test` tasks default to MIX_ENV=test.
+#
+#   bin/mix test
+#   bin/mix format
+#   MIX_ENV=prod bin/mix compile
+set -e
+cd "$(dirname "$0")/.."
+
+case "$1" in
+  test) env="${MIX_ENV:-test}" ;;
+  *) env="${MIX_ENV:-dev}" ;;
+esac
+
+exec docker compose run --rm -T -e MIX_ENV="$env" web sh -c \
+  'mix local.hex --force --if-missing >/dev/null && mix local.rebar --force --if-missing >/dev/null && exec mix "$@"' -- "$@"
