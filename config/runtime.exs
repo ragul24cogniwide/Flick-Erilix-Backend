@@ -27,6 +27,13 @@ config :chat_server, ChatServerWeb.Endpoint,
 # x-forwarded-for. Leave unset otherwise, because clients can forge that header.
 config :chat_server, :trust_proxy, System.get_env("TRUST_PROXY") in ~w(true 1)
 
+case System.get_env("MESSAGE_RETENTION") do
+  nil -> :ok
+  "keep_metadata" -> config :chat_server, :delivered_message_retention, :keep_metadata
+  "delete_row" -> config :chat_server, :delivered_message_retention, :delete_row
+  other -> raise "MESSAGE_RETENTION must be keep_metadata or delete_row, got: #{other}"
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

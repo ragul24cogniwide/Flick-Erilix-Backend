@@ -6,7 +6,7 @@ defmodule ChatServer.Conversations do
   alias ChatServer.Accounts.{Device, User}
   alias ChatServer.Conversations.{Conversation, Member}
   alias ChatServer.Messaging.{Delivery, Message}
-  alias ChatServer.Repo
+  alias ChatServer.{Messaging, Realtime, Repo}
   alias Ecto.Changeset
   alias Ecto.Multi
 
@@ -64,7 +64,9 @@ defmodule ChatServer.Conversations do
         end)
         |> Repo.transaction()
 
-      {:ok, Repo.preload(conversation, members: :user), status}
+      conversation = Repo.preload(conversation, members: :user)
+      if status == :created, do: notify_members(conversation)
+      {:ok, conversation, status}
     else
       {:error, :user_not_found}
     end
@@ -92,7 +94,9 @@ defmodule ChatServer.Conversations do
         end)
         |> Repo.transaction()
 
-      {:ok, Repo.preload(conversation, members: :user), :created}
+      conversation = Repo.preload(conversation, members: :user)
+      notify_members(conversation)
+      {:ok, conversation, :created}
     end
   end
 
@@ -136,7 +140,9 @@ defmodule ChatServer.Conversations do
          true <- users_exist?([user_id]) || {:error, :user_not_found},
          :ok <- ensure_group_has_room(conversation) do
       insert_members(Repo, conversation.id, [user_id], :member)
-      {:ok, Repo.preload(conversation, members: :user)}
+      conversation = Repo.preload(conversation, members: :user)
+      notify_members(conversation)
+      {:ok, conversation}
     end
   end
 
@@ -155,7 +161,13 @@ defmodule ChatServer.Conversations do
           |> remove_member_locked(actor.id, user_id)
         end)
 
-      result
+      with {:ok, conversation} <- result do
+        Messaging.forget_member_queue(conversation.id, user_id)
+        conversation = Repo.preload(conversation, members: :user)
+        notify_members(conversation)
+        Realtime.notify_membership_changed([user_id])
+        {:ok, conversation}
+      end
     end
   end
 
@@ -184,6 +196,27 @@ defmodule ChatServer.Conversations do
   defp delete_member(conversation, target) do
     Repo.delete!(target)
     {:ok, conversation}
+  end
+
+  defp notify_members(conversation) do
+    conversation.members |> Enum.map(& &1.user_id) |> Realtime.notify_membership_changed()
+  end
+
+  @doc "A user's conversations and the people they share one with, loaded in one query."
+  def membership_snapshot(user_id) do
+    rows =
+      Repo.all(
+        from mine in Member,
+          left_join: other in Member,
+          on: other.conversation_id == mine.conversation_id and other.user_id != ^user_id,
+          where: mine.user_id == ^user_id,
+          select: {mine.conversation_id, other.user_id}
+      )
+
+    %{
+      conversation_ids: MapSet.new(rows, &elem(&1, 0)),
+      peer_ids: for({_conversation_id, peer_id} <- rows, peer_id, into: MapSet.new(), do: peer_id)
+    }
   end
 
   defp fetch_group_for_admin(conversation_id, user_id) do

@@ -128,6 +128,62 @@ defmodule ChatServer.Messaging do
     |> Changeset.validate_required([:ciphertext], message: "must be non-empty base64")
   end
 
+  ## Releasing
+
+  @doc """
+  Clears any of these messages that no recipient device is still waiting for. By
+  config this drops either the ciphertext (`:keep_metadata`) or the row (`:delete_row`).
+
+  With `:delete_row` the delivery rows go too, so a read receipt can no longer be
+  recorded once a message has been fully delivered.
+  """
+  def release_delivered([]), do: :ok
+
+  def release_delivered(message_ids) do
+    releasable =
+      from m in Message,
+        as: :message,
+        where: m.id in ^message_ids and not is_nil(m.ciphertext),
+        where: not exists(undelivered_query())
+
+    case Application.get_env(:chat_server, :delivered_message_retention, :keep_metadata) do
+      :keep_metadata -> Repo.update_all(releasable, set: [ciphertext: nil])
+      :delete_row -> Repo.delete_all(releasable)
+    end
+
+    :ok
+  end
+
+  defp undelivered_query do
+    from d in Delivery,
+      where: d.message_id == parent_as(:message).id and is_nil(d.delivered_at),
+      select: 1
+  end
+
+  @doc "Drops a logged-out device's queue, so it stops holding messages on the server."
+  def forget_device_queue(device_id) do
+    drop_pending(from d in Delivery, where: d.recipient_device_id == ^device_id)
+  end
+
+  @doc "Drops what is queued for a user removed from a conversation."
+  def forget_member_queue(conversation_id, user_id) do
+    messages = from m in Message, where: m.conversation_id == ^conversation_id, select: m.id
+    devices = from d in Device, where: d.user_id == ^user_id, select: d.id
+
+    drop_pending(
+      from d in Delivery,
+        where: d.message_id in subquery(messages),
+        where: d.recipient_device_id in subquery(devices)
+    )
+  end
+
+  defp drop_pending(deliveries) do
+    {_count, message_ids} =
+      Repo.delete_all(from d in deliveries, where: is_nil(d.delivered_at), select: d.message_id)
+
+    release_delivered(message_ids)
+  end
+
   ## Reading
 
   @doc """

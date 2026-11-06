@@ -4,7 +4,7 @@ defmodule ChatServer.Accounts do
   import Ecto.Query
 
   alias ChatServer.Accounts.{Device, OtpCode, RefreshToken, User}
-  alias ChatServer.{Repo, SmsProvider}
+  alias ChatServer.{Messaging, Repo, SmsProvider}
   alias ChatServerWeb.Endpoint
   alias Ecto.Multi
 
@@ -163,6 +163,7 @@ defmodule ChatServer.Accounts do
 
   defp rotate_refresh_token(%RefreshToken{revoked_at: %DateTime{}} = token) do
     Repo.update_all(active_refresh_tokens(token.device_id), set: [revoked_at: now()])
+    Endpoint.broadcast(socket_id(token.device_id), "disconnect", %{})
     {:error, :invalid_refresh_token}
   end
 
@@ -187,7 +188,7 @@ defmodule ChatServer.Accounts do
   def logout(%Device{} = device) do
     Repo.update_all(active_refresh_tokens(device.id), set: [revoked_at: now()])
     Endpoint.broadcast(socket_id(device.id), "disconnect", %{})
-    :ok
+    Messaging.forget_device_queue(device.id)
   end
 
   @doc "Topic used to force-close a device's sockets."

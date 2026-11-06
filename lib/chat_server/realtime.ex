@@ -6,6 +6,20 @@ defmodule ChatServer.Realtime do
   def device_topic(device_id), do: "device:#{device_id}"
   def user_channel_topic(user_id), do: "user:#{user_id}"
   def presence_topic(user_id), do: "presence:#{user_id}"
+  def conversation_topic(conversation_id), do: "conversation:#{conversation_id}"
+
+  defp membership_topic(user_id), do: "membership:#{user_id}"
+
+  def subscribe_to_membership_changes(user_id) do
+    Phoenix.PubSub.subscribe(ChatServer.PubSub, membership_topic(user_id))
+  end
+
+  @doc "Tells these users' open channels to reload their conversations and peers."
+  def notify_membership_changed(user_ids) do
+    Enum.each(user_ids, fn user_id ->
+      Phoenix.PubSub.broadcast(ChatServer.PubSub, membership_topic(user_id), :membership_changed)
+    end)
+  end
 
   def broadcast_to_device(device_id, event, payload) do
     Endpoint.broadcast(device_topic(device_id), event, payload)
