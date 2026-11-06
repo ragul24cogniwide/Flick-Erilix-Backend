@@ -34,6 +34,7 @@ services:
       TRUST_PROXY: "true"
       MESSAGE_RETENTION: ${MESSAGE_RETENTION:-keep_metadata}
       FIREBASE_CREDENTIALS_BASE64: ${FIREBASE_CREDENTIALS_BASE64:-}
+      FAST2SMS_API_KEY: ${FAST2SMS_API_KEY:-}
     expose:
       - "4000"
     ulimits:

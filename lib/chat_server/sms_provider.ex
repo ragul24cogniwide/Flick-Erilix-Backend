@@ -2,8 +2,8 @@ defmodule ChatServer.SmsProvider do
   @moduledoc """
   Sends one-time codes by SMS.
 
-  To plug in a real provider, implement this behaviour and set it in
-  `config/runtime.exs`:
+  Setting `FAST2SMS_API_KEY` selects `ChatServer.SmsProvider.Fast2Sms`. To use another
+  provider, implement this behaviour and set it in `config/runtime.exs`:
 
       config :chat_server, :sms_provider, ChatServer.SmsProvider.MyProvider
   """

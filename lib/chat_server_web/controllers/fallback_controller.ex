@@ -19,7 +19,10 @@ defmodule ChatServerWeb.FallbackController do
     not_a_group: :unprocessable_entity,
     last_admin: :unprocessable_entity,
     group_full: :unprocessable_entity,
-    sms_provider_not_configured: :service_unavailable
+    phone_country_not_supported: :unprocessable_entity,
+    sms_provider_not_configured: :service_unavailable,
+    sms_provider_not_ready: :service_unavailable,
+    sms_delivery_failed: :bad_gateway
   }
 
   def call(conn, {:error, %Ecto.Changeset{} = changeset}) do

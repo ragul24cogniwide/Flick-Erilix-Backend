@@ -34,6 +34,15 @@ case System.get_env("MESSAGE_RETENTION") do
   other -> raise "MESSAGE_RETENTION must be keep_metadata or delete_row, got: #{other}"
 end
 
+case System.get_env("FAST2SMS_API_KEY") do
+  value when value in [nil, ""] ->
+    :ok
+
+  api_key ->
+    config :chat_server, :sms_provider, ChatServer.SmsProvider.Fast2Sms
+    config :chat_server, :fast2sms_api_key, api_key
+end
+
 case System.get_env("FIREBASE_CREDENTIALS_BASE64") do
   value when value in [nil, ""] ->
     :ok

@@ -26,4 +26,4 @@ erl_crash.dump
 chat_server-*.tar
 
 # Production secrets for docker-compose.prod.yml.
-/.env
+# /.env

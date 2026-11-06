@@ -9,11 +9,11 @@ defmodule ChatServer.PushProvider.Fcm do
 
   @behaviour ChatServer.PushProvider
 
+  alias ChatServer.Http
   alias ChatServer.PushProvider.Fcm.TokenCache
 
   @scope "https://www.googleapis.com/auth/firebase.messaging"
   @token_lifetime_seconds 3600
-  @http_timeout 10_000
 
   @impl true
   def notify(push_token, notification), do: send_message(push_token, notification, false)
@@ -126,27 +126,10 @@ defmodule ChatServer.PushProvider.Fcm do
   defp encode_segment(map), do: map |> Jason.encode!() |> Base.url_encode64(padding: false)
 
   defp post(url, headers, content_type, body) do
-    request =
-      {String.to_charlist(url),
-       Enum.map(headers, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end),
-       String.to_charlist(content_type), body}
-
-    http_options = [timeout: @http_timeout, connect_timeout: @http_timeout, ssl: ssl_options()]
-
-    case :httpc.request(:post, request, http_options, body_format: :binary) do
-      {:ok, {{_version, status, _reason}, _headers, response}} -> {:ok, status, response}
-      # The reason is dropped because it can quote the request, which holds credentials.
-      {:error, _reason} -> {:error, :fcm_unreachable}
+    case Http.request(:post, url, headers, {content_type, body}) do
+      {:ok, status, response} -> {:ok, status, response}
+      {:error, :unreachable} -> {:error, :fcm_unreachable}
     end
-  end
-
-  defp ssl_options do
-    [
-      verify: :verify_peer,
-      cacerts: :public_key.cacerts_get(),
-      depth: 3,
-      customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-    ]
   end
 
   defp credentials do

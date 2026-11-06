@@ -53,9 +53,19 @@ docker compose -f docker-compose.prod.yml up -d --build
 This builds the release, runs migrations on boot, and puts Caddy in front to obtain a
 TLS certificate for `PHX_HOST`. Ports 80 and 443 must be reachable from the internet.
 
-**Before going live, plug in an SMS provider.** Without one, `POST /auth/request_otp`
-returns 503, so nobody can sign in. Implement the behaviour in
-[sms_provider.ex](lib/chat_server/sms_provider.ex) and set it in `config/runtime.exs`.
+**SMS uses Fast2SMS** when `FAST2SMS_API_KEY` is set. Without it, `POST /auth/request_otp`
+returns 503 in production. Dev mode ignores the key and prints codes to the log, so testing
+uses no credit.
+
+- **Website verification comes first.** Complete it under "OTP Message" in the Fast2SMS
+  panel. Until then `request_otp` returns 503 with `sms_provider_not_ready`.
+- **Indian numbers only.** Other countries get 422 with `phone_country_not_supported`. To
+  support them, add a provider using the behaviour in
+  [sms_provider.ex](lib/chat_server/sms_provider.ex).
+- **Test the key without sending anything:** run
+  `ChatServer.SmsProvider.Fast2Sms.wallet_balance()`.
+- **The wallet is prepaid.** Rate limits cap each phone at 5 codes an hour and each IP at
+  100, but many phones together can still spend the balance, so watch it after launch.
 
 **Push uses Firebase Cloud Messaging** when `FIREBASE_CREDENTIALS_BASE64` is set, and
 only logs otherwise. Notifications read "New message" and never contain message content.
@@ -74,6 +84,7 @@ To check the credentials without notifying anyone, run
 | `TRUST_PROXY` | No | Set to `true` only behind a proxy, so rate limits use `x-forwarded-for`. Clients can forge that header if nothing overwrites it |
 | `MESSAGE_RETENTION` | No (`keep_metadata`) | After full delivery, `keep_metadata` clears the ciphertext and `delete_row` removes the message |
 | `FIREBASE_CREDENTIALS_BASE64` | No | A base64-encoded Firebase service account. Turns on real push |
+| `FAST2SMS_API_KEY` | No | Turns on real SMS sign-in codes through Fast2SMS |
 | `DB_HOST`, `DB_PORT` | No | Dev and test only: Postgres host and published port |
 
 ## Running many connections
