@@ -12,6 +12,8 @@ defmodule ChatServerWeb.FallbackController do
     not_found: :not_found,
     invalid_phone: :unprocessable_entity,
     invalid_hashes: :unprocessable_entity,
+    invalid_prekeys: :unprocessable_entity,
+    no_keys: :unprocessable_entity,
     invalid_cursor: :unprocessable_entity,
     user_not_found: :unprocessable_entity,
     not_a_group: :unprocessable_entity,

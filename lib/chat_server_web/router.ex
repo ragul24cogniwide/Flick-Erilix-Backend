@@ -35,6 +35,9 @@ defmodule ChatServerWeb.Router do
 
     post "/contacts/match", ContactController, :match
 
+    put "/keys", KeyController, :upload
+    get "/keys/:user_id", KeyController, :show
+
     post "/conversations", ConversationController, :create
     get "/conversations", ConversationController, :index
     post "/conversations/:id/members", ConversationController, :add_member
