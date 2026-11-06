@@ -1,10 +1,9 @@
 defmodule ChatServer.SmsProvider.Fast2Sms do
   @moduledoc """
-  Sends sign-in codes through Fast2SMS's OTP route.
+  Sends sign-in codes through Fast2SMS's Quick SMS route, at ₹7 per SMS.
 
-  Fast2SMS only reaches Indian mobile numbers, so other countries get an error. The
-  account must complete website verification under "OTP Message" in the Fast2SMS panel
-  first. Until then Fast2SMS answers with status 996, and sign-in returns 503.
+  Fast2SMS closed its cheaper OTP route, and its 25 paise rate needs DLT registration.
+  It only reaches Indian mobile numbers, so other countries get an error.
   """
 
   @behaviour ChatServer.SmsProvider
@@ -14,7 +13,6 @@ defmodule ChatServer.SmsProvider.Fast2Sms do
   require Logger
 
   @indian_mobile ~r/^\+91([6-9][0-9]{9})$/
-  @website_verification_needed 996
   @invalid_key 412
 
   @impl true
@@ -37,7 +35,11 @@ defmodule ChatServer.SmsProvider.Fast2Sms do
 
   defp deliver(national_number, code) do
     body =
-      Jason.encode!(%{route: "otp", variables_values: code, numbers: national_number})
+      Jason.encode!(%{
+        route: "q",
+        message: "Your sign-in code is #{code}. It expires in 5 minutes. Do not share it.",
+        numbers: national_number
+      })
 
     case Http.request(
            :post,
@@ -51,14 +53,6 @@ defmodule ChatServer.SmsProvider.Fast2Sms do
   end
 
   defp handle_response(200, {:ok, %{"return" => true}}), do: :ok
-
-  defp handle_response(_status, {:ok, %{"status_code" => @website_verification_needed}}) do
-    Logger.error(
-      "Fast2SMS refused the code: complete website verification under OTP Message in its panel"
-    )
-
-    {:error, :sms_provider_not_ready}
-  end
 
   defp handle_response(_status, {:ok, %{"status_code" => @invalid_key}}) do
     Logger.error("Fast2SMS refused the code: FAST2SMS_API_KEY is invalid")

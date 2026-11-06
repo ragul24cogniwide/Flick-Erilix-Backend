@@ -34,6 +34,14 @@ case System.get_env("MESSAGE_RETENTION") do
   other -> raise "MESSAGE_RETENTION must be keep_metadata or delete_row, got: #{other}"
 end
 
+# Returns sign-in codes in the API response instead of sending an SMS, for testing only.
+# With this on, anyone can sign in as any phone number. Tests set it themselves.
+if config_env() != :test do
+  config :chat_server,
+         :dev_mode_expose_otp,
+         System.get_env("DEV_MODE_EXPOSE_OTP") in ~w(true 1)
+end
+
 case System.get_env("FAST2SMS_API_KEY") do
   value when value in [nil, ""] ->
     :ok

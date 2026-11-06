@@ -29,9 +29,6 @@ defmodule ChatServer.SmsProvider.Fast2SmsTest do
       )
 
       case payload["numbers"] do
-        "9000000996" ->
-          reply(conn, 400, %{status_code: 996, message: "complete website verification"})
-
         "9000000412" ->
           reply(conn, 401, %{return: false, status_code: 412, message: "Invalid"})
 
@@ -72,16 +69,14 @@ defmodule ChatServer.SmsProvider.Fast2SmsTest do
     :ok
   end
 
-  test "sends the code on the OTP route, with a 10-digit number and the key" do
+  test "sends the code on the Quick route, with a 10-digit number and the key" do
     assert :ok = Fast2Sms.send_otp("+919876543210", "012345")
 
     assert_received {:sms_request, "/dev/bulkV2", ["test-key"], payload}
 
-    assert payload == %{
-             "route" => "otp",
-             "variables_values" => "012345",
-             "numbers" => "9876543210"
-           }
+    assert payload["route"] == "q"
+    assert payload["numbers"] == "9876543210"
+    assert payload["message"] =~ "012345"
   end
 
   test "refuses numbers it cannot reach, without calling Fast2SMS" do
@@ -90,15 +85,6 @@ defmodule ChatServer.SmsProvider.Fast2SmsTest do
     end
 
     refute_received {:sms_request, _path, _auth, _payload}
-  end
-
-  test "reports that website verification is still needed" do
-    log =
-      capture_log(fn ->
-        assert {:error, :sms_provider_not_ready} = Fast2Sms.send_otp("+919000000996", "123456")
-      end)
-
-    assert log =~ "website verification"
   end
 
   test "reports an invalid key" do
@@ -156,10 +142,10 @@ defmodule ChatServer.SmsProvider.Fast2SmsTest do
       assert conn |> request_otp("+919876543210") |> response(202)
     end
 
-    test "returns 503 until website verification is done", %{conn: conn} do
+    test "returns 503 when the key is invalid", %{conn: conn} do
       capture_log(fn ->
         assert %{"error" => "sms_provider_not_ready"} =
-                 conn |> request_otp("+919000000996") |> json_response(503)
+                 conn |> request_otp("+919000000412") |> json_response(503)
       end)
     end
 
@@ -177,7 +163,8 @@ defmodule ChatServer.SmsProvider.Fast2SmsTest do
 
     test "a code sent this way can complete sign-in", %{conn: conn} do
       assert conn |> request_otp("+919876543210") |> response(202)
-      assert_received {:sms_request, _path, _auth, %{"variables_values" => code}}
+      assert_received {:sms_request, _path, _auth, %{"message" => message}}
+      [code] = Regex.run(~r/\d{6}/, message)
 
       body =
         conn

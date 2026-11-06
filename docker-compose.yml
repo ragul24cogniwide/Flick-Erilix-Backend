@@ -28,6 +28,8 @@ services:
       DB_HOST: db
       MIX_ENV: ${MIX_ENV:-dev}
       PORT: 4000
+      # Returns sign-in codes in the API response, so the app can show them on screen.
+      DEV_MODE_EXPOSE_OTP: ${DEV_MODE_EXPOSE_OTP:-true}
     command: >
       sh -c "mix local.hex --force --if-missing &&
              mix local.rebar --force --if-missing &&

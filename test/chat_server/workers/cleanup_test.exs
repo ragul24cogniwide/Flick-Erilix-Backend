@@ -71,8 +71,8 @@ defmodule ChatServer.Workers.CleanupTest do
   test "removes expired OTP codes and keeps live ones" do
     expired = unique_phone()
     live = unique_phone()
-    :ok = Accounts.request_otp(expired)
-    :ok = Accounts.request_otp(live)
+    {:ok, _delivery} = Accounts.request_otp(expired)
+    {:ok, _delivery} = Accounts.request_otp(live)
     past = DateTime.add(DateTime.utc_now(), -1)
     Repo.update_all(from(o in OtpCode, where: o.phone == ^expired), set: [expires_at: past])
 

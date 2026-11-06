@@ -10,8 +10,8 @@ defmodule ChatServerWeb.AuthController do
   plug :rate_limit when action in [:request_otp, :verify_otp]
 
   def request_otp(conn, params) do
-    with :ok <- Accounts.request_otp(params["phone"]) do
-      conn |> put_status(:accepted) |> json(%{status: "code_sent"})
+    with {:ok, delivery} <- Accounts.request_otp(params["phone"]) do
+      conn |> put_status(:accepted) |> json(Map.put(delivery, :status, "code_sent"))
     end
   end
 

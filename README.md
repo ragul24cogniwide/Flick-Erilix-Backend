@@ -21,16 +21,26 @@ mix setup
 mix phx.server
 ```
 
-In dev, sign-in codes are printed to the log. To try a sign-in:
+### Developer sign-in codes
+
+While `DEV_MODE_EXPOSE_OTP=true`, no SMS is sent and nothing is charged. The code comes
+back in the response as `dev_otp`, so the app can show it on screen:
 
 ```sh
 curl -X POST localhost:4000/api/v1/auth/request_otp \
-  -H 'content-type: application/json' -d '{"phone":"+15551234567"}'
-docker compose logs web | grep 'sign-in code'
+  -H 'content-type: application/json' -d '{"phone":"+918946014462"}'
+# {"status":"code_sent","dev_otp":"123456"}
+
 curl -X POST localhost:4000/api/v1/auth/verify_otp \
   -H 'content-type: application/json' \
-  -d '{"phone":"+15551234567","code":"<code>","device":{"platform":"web"}}'
+  -d '{"phone":"+918946014462","code":"123456","device":{"platform":"web"}}'
 ```
+
+It is on by default for `docker compose up`, and it is on in the current `.env`.
+
+**This is insecure.** Anyone can sign in as any phone number, so set
+`DEV_MODE_EXPOSE_OTP=false` before real users. The server logs a warning at startup
+while it is on. With it off, codes go by SMS and no `dev_otp` is returned.
 
 Connect to the socket at `ws://localhost:4000/socket/websocket?vsn=2.0.0&token=<access_token>`
 and join `user:<your_user_id>`.
@@ -53,12 +63,12 @@ docker compose -f docker-compose.prod.yml up -d --build
 This builds the release, runs migrations on boot, and puts Caddy in front to obtain a
 TLS certificate for `PHX_HOST`. Ports 80 and 443 must be reachable from the internet.
 
-**SMS uses Fast2SMS** when `FAST2SMS_API_KEY` is set. Without it, `POST /auth/request_otp`
-returns 503 in production. Dev mode ignores the key and prints codes to the log, so testing
-uses no credit.
+**SMS uses Fast2SMS** when `FAST2SMS_API_KEY` is set and `DEV_MODE_EXPOSE_OTP` is off.
+Without a key, `POST /auth/request_otp` returns 503 in production.
 
-- **Website verification comes first.** Complete it under "OTP Message" in the Fast2SMS
-  panel. Until then `request_otp` returns 503 with `sms_provider_not_ready`.
+- **It costs ₹7 per SMS.** This is Fast2SMS's Quick SMS route, because it closed its
+  cheaper OTP route. Its 25 paise rate needs DLT registration, so compare the cost before
+  launch.
 - **Indian numbers only.** Other countries get 422 with `phone_country_not_supported`. To
   support them, add a provider using the behaviour in
   [sms_provider.ex](lib/chat_server/sms_provider.ex).
@@ -85,6 +95,7 @@ To check the credentials without notifying anyone, run
 | `MESSAGE_RETENTION` | No (`keep_metadata`) | After full delivery, `keep_metadata` clears the ciphertext and `delete_row` removes the message |
 | `FIREBASE_CREDENTIALS_BASE64` | No | A base64-encoded Firebase service account. Turns on real push |
 | `FAST2SMS_API_KEY` | No | Turns on real SMS sign-in codes through Fast2SMS |
+| `DEV_MODE_EXPOSE_OTP` | No (`false`) | `true` returns codes as `dev_otp` and sends no SMS. Insecure: testing only |
 | `DB_HOST`, `DB_PORT` | No | Dev and test only: Postgres host and published port |
 
 ## Running many connections

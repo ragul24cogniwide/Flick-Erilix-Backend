@@ -5,9 +5,12 @@ defmodule ChatServer.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     ChatServer.LogRedaction.install()
+    warn_if_otp_exposed()
 
     children = [
       ChatServerWeb.Telemetry,
@@ -25,6 +28,15 @@ defmodule ChatServer.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: ChatServer.Supervisor]
     Supervisor.start_link(children ++ push_children(), opts)
+  end
+
+  defp warn_if_otp_exposed do
+    if ChatServer.Accounts.expose_otp?() do
+      Logger.warning(
+        "INSECURE: DEV_MODE_EXPOSE_OTP is on. Anyone can sign in as any phone number. " <>
+          "Turn it off before real users."
+      )
+    end
   end
 
   defp push_children do

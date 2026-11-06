@@ -18,7 +18,12 @@ defmodule ChatServer.Accounts do
 
   ## One-time codes
 
-  @doc "Creates a code for the phone, replacing any earlier one, and sends it by SMS."
+  @doc """
+  Creates a code for the phone, replacing any earlier one, and delivers it.
+
+  Returns `{:ok, %{}}` once the code is sent by SMS. With `DEV_MODE_EXPOSE_OTP` on, no SMS
+  is sent and it returns `{:ok, %{dev_otp: code}}` so the app can show the code on screen.
+  """
   def request_otp(phone) do
     if User.valid_phone?(phone) do
       code = generate_code()
@@ -34,11 +39,22 @@ defmodule ChatServer.Accounts do
         })
         |> Repo.transaction()
 
-      SmsProvider.send_otp(phone, code)
+      deliver_code(phone, code)
     else
       {:error, :invalid_phone}
     end
   end
+
+  defp deliver_code(phone, code) do
+    if expose_otp?() do
+      {:ok, %{dev_otp: code}}
+    else
+      with :ok <- SmsProvider.send_otp(phone, code), do: {:ok, %{}}
+    end
+  end
+
+  @doc "True when codes are returned to the caller instead of sent. Never safe for real users."
+  def expose_otp?, do: Application.get_env(:chat_server, :dev_mode_expose_otp, false)
 
   @doc """
   Checks a code and, when it matches, signs the phone in on a new device.

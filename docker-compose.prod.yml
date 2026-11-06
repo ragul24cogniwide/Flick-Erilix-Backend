@@ -35,6 +35,8 @@ services:
       MESSAGE_RETENTION: ${MESSAGE_RETENTION:-keep_metadata}
       FIREBASE_CREDENTIALS_BASE64: ${FIREBASE_CREDENTIALS_BASE64:-}
       FAST2SMS_API_KEY: ${FAST2SMS_API_KEY:-}
+      # Insecure: anyone can sign in as any number. Must be false for real users.
+      DEV_MODE_EXPOSE_OTP: ${DEV_MODE_EXPOSE_OTP:-false}
     expose:
       - "4000"
     ulimits:
