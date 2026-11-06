@@ -33,6 +33,7 @@ services:
       # Caddy is the only way in, so its x-forwarded-for can be trusted.
       TRUST_PROXY: "true"
       MESSAGE_RETENTION: ${MESSAGE_RETENTION:-keep_metadata}
+      FIREBASE_CREDENTIALS_BASE64: ${FIREBASE_CREDENTIALS_BASE64:-}
     expose:
       - "4000"
     ulimits:

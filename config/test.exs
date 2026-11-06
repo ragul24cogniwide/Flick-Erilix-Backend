@@ -34,7 +34,9 @@ config :chat_server, :rate_limits,
   verify_otp_phone: {1_000_000, 60},
   verify_otp_ip: {1_000_000, 60},
   msg_send_user: {1_000_000, 60},
-  msg_send_ip: {1_000_000, 60}
+  msg_send_ip: {1_000_000, 60},
+  contacts_match_user: {1_000_000, 60},
+  keys_fetch_user: {1_000_000, 60}
 
 # Print only warnings and errors during test
 config :logger, level: :warning

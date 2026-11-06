@@ -5,6 +5,8 @@ defmodule ChatServerWeb.ContactController do
 
   action_fallback ChatServerWeb.FallbackController
 
+  plug ChatServerWeb.Plugs.RateLimit, :contacts_match_user
+
   def match(conn, params) do
     with {:ok, users} <- Accounts.match_contacts(params["hashes"]) do
       json(conn, %{

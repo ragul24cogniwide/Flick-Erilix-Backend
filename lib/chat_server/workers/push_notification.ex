@@ -11,6 +11,7 @@ defmodule ChatServer.Workers.PushNotification do
 
   import Ecto.Query
 
+  alias ChatServer.Accounts
   alias ChatServer.Accounts.Device
   alias ChatServer.{Messaging, PushProvider, Repo}
 
@@ -33,9 +34,16 @@ defmodule ChatServer.Workers.PushNotification do
     with %Device{push_token: token} when is_binary(token) <- Repo.get(Device, device_id),
          # The device may have reconnected, or logged out, since this was enqueued.
          true <- Messaging.device_has_pending?(device_id) do
-      PushProvider.notify(token, %{event: "new_message"})
+      send_push(device_id, token)
     else
       _nothing_to_do -> :ok
+    end
+  end
+
+  defp send_push(device_id, token) do
+    case PushProvider.notify(token, %{event: "new_message"}) do
+      {:error, :invalid_token} -> Accounts.clear_push_token(device_id, token)
+      result -> result
     end
   end
 end

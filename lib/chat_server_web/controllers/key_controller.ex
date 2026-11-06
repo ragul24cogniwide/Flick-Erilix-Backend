@@ -5,6 +5,9 @@ defmodule ChatServerWeb.KeyController do
 
   action_fallback ChatServerWeb.FallbackController
 
+  # Each fetch uses up one of the target's one-time prekeys, so limit how fast.
+  plug ChatServerWeb.Plugs.RateLimit, :keys_fetch_user when action == :show
+
   def upload(conn, params) do
     with {:ok, available} <- Keys.upload_keys(conn.assigns.current_device, params) do
       json(conn, %{one_time_prekeys_available: available})

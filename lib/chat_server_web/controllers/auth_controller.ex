@@ -3,6 +3,7 @@ defmodule ChatServerWeb.AuthController do
 
   alias ChatServer.{Accounts, RateLimiter}
   alias ChatServerWeb.{ClientIp, UserJSON}
+  alias ChatServerWeb.Plugs.RateLimit
 
   action_fallback ChatServerWeb.FallbackController
 
@@ -57,11 +58,7 @@ defmodule ChatServerWeb.AuthController do
         conn
 
       {:error, retry_after} ->
-        conn
-        |> put_resp_header("retry-after", Integer.to_string(retry_after))
-        |> put_status(:too_many_requests)
-        |> json(%{error: "rate_limited"})
-        |> halt()
+        RateLimit.deny(conn, retry_after)
     end
   end
 end

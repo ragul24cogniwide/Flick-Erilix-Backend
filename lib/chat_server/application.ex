@@ -24,7 +24,14 @@ defmodule ChatServer.Application do
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: ChatServer.Supervisor]
-    Supervisor.start_link(children, opts)
+    Supervisor.start_link(children ++ push_children(), opts)
+  end
+
+  defp push_children do
+    case Application.get_env(:chat_server, :push_provider) do
+      ChatServer.PushProvider.Fcm -> [ChatServer.PushProvider.Fcm.TokenCache]
+      _other -> []
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration

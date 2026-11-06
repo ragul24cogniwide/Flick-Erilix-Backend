@@ -53,11 +53,14 @@ docker compose -f docker-compose.prod.yml up -d --build
 This builds the release, runs migrations on boot, and puts Caddy in front to obtain a
 TLS certificate for `PHX_HOST`. Ports 80 and 443 must be reachable from the internet.
 
-**Before going live, plug in real providers.** Without an SMS provider,
-`POST /auth/request_otp` returns 503, so nobody can sign in. Without a push provider,
-pushes are only logged. Implement the behaviour in
-[sms_provider.ex](lib/chat_server/sms_provider.ex) or
-[push_provider.ex](lib/chat_server/push_provider.ex) and set it in `config/runtime.exs`.
+**Before going live, plug in an SMS provider.** Without one, `POST /auth/request_otp`
+returns 503, so nobody can sign in. Implement the behaviour in
+[sms_provider.ex](lib/chat_server/sms_provider.ex) and set it in `config/runtime.exs`.
+
+**Push uses Firebase Cloud Messaging** when `FIREBASE_CREDENTIALS_BASE64` is set, and
+only logs otherwise. Notifications read "New message" and never contain message content.
+To check the credentials without notifying anyone, run
+`ChatServer.PushProvider.Fcm.check_credentials()`.
 
 ### Environment variables
 
@@ -70,6 +73,7 @@ pushes are only logged. Implement the behaviour in
 | `PORT` | No (4000) | HTTP port |
 | `TRUST_PROXY` | No | Set to `true` only behind a proxy, so rate limits use `x-forwarded-for`. Clients can forge that header if nothing overwrites it |
 | `MESSAGE_RETENTION` | No (`keep_metadata`) | After full delivery, `keep_metadata` clears the ciphertext and `delete_row` removes the message |
+| `FIREBASE_CREDENTIALS_BASE64` | No | A base64-encoded Firebase service account. Turns on real push |
 | `DB_HOST`, `DB_PORT` | No | Dev and test only: Postgres host and published port |
 
 ## Running many connections
@@ -147,8 +151,10 @@ Choices the spec left open, and gaps to know about:
   stays open past the 15-minute expiry until the device logs out or disconnects.
 - **Contact hashes are not private.** `POST /contacts/match` takes SHA-256 hashes of
   phone numbers as specified. Phone numbers are few enough to brute-force, so this stops
-  casual exposure only. The route is also not rate limited, and neither is
-  `GET /keys/:user_id`, so a client could drain another user's one-time prekeys.
+  casual exposure only.
+- **Prekey draining.** `GET /keys/:user_id` is limited to 30 fetches a minute per user,
+  and contact matching to 10. That slows one account from using up another user's
+  one-time prekeys, but many accounts together could still do it.
 - **Rate limits are per node.** With several nodes, the effective limit is multiplied by
   the node count. Presence and message routing work across a cluster.
 - **Tokens in URLs.** The socket token is in the query string, as specified. Do not turn

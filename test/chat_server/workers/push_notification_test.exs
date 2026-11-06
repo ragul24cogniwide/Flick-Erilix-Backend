@@ -121,6 +121,15 @@ defmodule ChatServer.Workers.PushNotificationTest do
       assert :ok = perform_job(PushNotification, %{device_id: Ecto.UUID.generate()})
     end
 
+    test "removes a dead token and does not retry", ctx do
+      {:ok, _} = Accounts.update_push_token(ctx.bob.device, %{"push_token" => "dead"})
+      message_fixture(ctx.alice, ctx.conversation)
+
+      assert :ok = perform_job(PushNotification, %{device_id: ctx.bob.device.id})
+
+      assert Repo.get!(Accounts.Device, ctx.bob.device.id).push_token == nil
+    end
+
     test "reports provider failures so the job retries", ctx do
       {:ok, _} = Accounts.update_push_token(ctx.bob.device, %{"push_token" => "fail"})
       message_fixture(ctx.alice, ctx.conversation)

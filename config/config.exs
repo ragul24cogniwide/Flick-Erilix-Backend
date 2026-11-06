@@ -35,7 +35,9 @@ config :chat_server, :rate_limits,
   verify_otp_phone: {10, 600},
   verify_otp_ip: {100, 600},
   msg_send_user: {120, 60},
-  msg_send_ip: {1200, 60}
+  msg_send_ip: {1200, 60},
+  contacts_match_user: {10, 60},
+  keys_fetch_user: {30, 60}
 
 # What happens to a message once every recipient device has it:
 # :keep_metadata clears the ciphertext only, :delete_row removes the message.

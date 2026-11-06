@@ -34,6 +34,15 @@ case System.get_env("MESSAGE_RETENTION") do
   other -> raise "MESSAGE_RETENTION must be keep_metadata or delete_row, got: #{other}"
 end
 
+case System.get_env("FIREBASE_CREDENTIALS_BASE64") do
+  value when value in [nil, ""] ->
+    :ok
+
+  credentials ->
+    config :chat_server, :push_provider, ChatServer.PushProvider.Fcm
+    config :chat_server, :fcm_credentials_base64, credentials
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

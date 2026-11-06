@@ -280,6 +280,16 @@ defmodule ChatServer.Accounts do
     device |> Device.push_token_changeset(attrs) |> Repo.update()
   end
 
+  @doc "Removes a dead push token, unless the device has since registered a new one."
+  def clear_push_token(device_id, token) do
+    Repo.update_all(
+      from(d in Device, where: d.id == ^device_id and d.push_token == ^token),
+      set: [push_token: nil]
+    )
+
+    :ok
+  end
+
   @max_contact_hashes 1000
 
   @doc "Finds registered users by the SHA-256 hex hash of their phone number."
