@@ -6,8 +6,6 @@ config :chat_server, ChatServer.Repo,
   password: "postgres",
   hostname: System.get_env("DB_HOST", "localhost"),
   database: "chat_server_dev",
-  # SQL debug logs include bound parameters such as phone numbers and tokens.
-  log: false,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10

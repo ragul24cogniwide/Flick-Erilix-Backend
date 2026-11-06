@@ -1,0 +1,5 @@
+# Obtains and renews a TLS certificate for PHX_HOST, and proxies HTTP and WebSockets.
+# Access logging stays off (Caddy's default), because the socket URL carries the token.
+{$PHX_HOST} {
+	reverse_proxy app:4000
+}

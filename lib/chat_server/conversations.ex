@@ -5,8 +5,8 @@ defmodule ChatServer.Conversations do
 
   alias ChatServer.Accounts.{Device, User}
   alias ChatServer.Conversations.{Conversation, Member}
-  alias ChatServer.Messaging.{Delivery, Message}
   alias ChatServer.{Messaging, Realtime, Repo}
+  alias ChatServer.Messaging.{Delivery, Message}
   alias Ecto.Changeset
   alias Ecto.Multi
 
@@ -45,31 +45,35 @@ defmodule ChatServer.Conversations do
 
   defp create_direct(%User{} = creator, %{user_id: peer_id}, _changeset) do
     if users_exist?([peer_id]) do
-      direct_key = [creator.id, peer_id] |> Enum.sort() |> Enum.join(":")
-      new = %Conversation{kind: :direct, created_by: creator.id, direct_key: direct_key}
-
-      {:ok, %{conversation: conversation, status: status}} =
-        Multi.new()
-        |> Multi.insert(:inserted, new, on_conflict: :nothing, conflict_target: :direct_key)
-        |> Multi.run(:conversation, fn repo, _changes ->
-          {:ok, repo.get_by!(Conversation, direct_key: direct_key)}
-        end)
-        |> Multi.run(:status, fn repo, %{inserted: inserted, conversation: stored} ->
-          if inserted.id == stored.id do
-            insert_members(repo, stored.id, [creator.id, peer_id], :member)
-            {:ok, :created}
-          else
-            {:ok, :existing}
-          end
-        end)
-        |> Repo.transaction()
-
-      conversation = Repo.preload(conversation, members: :user)
-      if status == :created, do: notify_members(conversation)
-      {:ok, conversation, status}
+      find_or_create_direct(creator, peer_id)
     else
       {:error, :user_not_found}
     end
+  end
+
+  defp find_or_create_direct(creator, peer_id) do
+    direct_key = [creator.id, peer_id] |> Enum.sort() |> Enum.join(":")
+    new = %Conversation{kind: :direct, created_by: creator.id, direct_key: direct_key}
+
+    {:ok, %{conversation: conversation, status: status}} =
+      Multi.new()
+      |> Multi.insert(:inserted, new, on_conflict: :nothing, conflict_target: :direct_key)
+      |> Multi.run(:conversation, fn repo, _changes ->
+        {:ok, repo.get_by!(Conversation, direct_key: direct_key)}
+      end)
+      |> Multi.run(:status, fn repo, %{inserted: inserted, conversation: stored} ->
+        if inserted.id == stored.id do
+          insert_members(repo, stored.id, [creator.id, peer_id], :member)
+          {:ok, :created}
+        else
+          {:ok, :existing}
+        end
+      end)
+      |> Repo.transaction()
+
+    conversation = Repo.preload(conversation, members: :user)
+    if status == :created, do: notify_members(conversation)
+    {:ok, conversation, status}
   end
 
   defp create_group(%User{} = creator, changeset) do

@@ -11,6 +11,9 @@ config :chat_server,
   ecto_repos: [ChatServer.Repo],
   generators: [timestamp_type: :utc_datetime_usec, binary_id: true]
 
+# SQL debug logs include bound parameters such as phone numbers and token hashes.
+config :chat_server, ChatServer.Repo, log: false
+
 # Replace with a real provider in production (see ChatServer.SmsProvider).
 config :chat_server, :sms_provider, ChatServer.SmsProvider.Unconfigured
 
