@@ -32,6 +32,14 @@ defmodule ChatServerWeb.Router do
     patch "/me", MeController, :update
 
     post "/devices/push_token", DeviceController, :push_token
+
+    post "/contacts/match", ContactController, :match
+
+    post "/conversations", ConversationController, :create
+    get "/conversations", ConversationController, :index
+    post "/conversations/:id/members", ConversationController, :add_member
+    delete "/conversations/:id/members/:user_id", ConversationController, :remove_member
+    get "/conversations/:id/messages", ConversationController, :messages
   end
 
   # Enable LiveDashboard in development

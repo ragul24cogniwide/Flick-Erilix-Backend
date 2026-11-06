@@ -11,6 +11,12 @@ defmodule ChatServerWeb.FallbackController do
     too_many_attempts: :too_many_requests,
     not_found: :not_found,
     invalid_phone: :unprocessable_entity,
+    invalid_hashes: :unprocessable_entity,
+    invalid_cursor: :unprocessable_entity,
+    user_not_found: :unprocessable_entity,
+    not_a_group: :unprocessable_entity,
+    last_admin: :unprocessable_entity,
+    group_full: :unprocessable_entity,
     sms_provider_not_configured: :service_unavailable
   }
 
