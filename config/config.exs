@@ -14,6 +14,17 @@ config :chat_server,
 # Replace with a real provider in production (see ChatServer.SmsProvider).
 config :chat_server, :sms_provider, ChatServer.SmsProvider.Unconfigured
 
+# Replace with a real provider in production (see ChatServer.PushProvider).
+config :chat_server, :push_provider, ChatServer.PushProvider.Log
+
+config :chat_server, Oban,
+  repo: ChatServer.Repo,
+  queues: [push: 20, maintenance: 1],
+  plugins: [
+    {Oban.Plugins.Pruner, max_age: 7 * 24 * 60 * 60},
+    {Oban.Plugins.Cron, crontab: [{"0 3 * * *", ChatServer.Workers.Cleanup}]}
+  ]
+
 # scope: {max_hits, window_seconds}
 config :chat_server, :rate_limits,
   request_otp_phone: {5, 3600},

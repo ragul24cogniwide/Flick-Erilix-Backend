@@ -97,10 +97,11 @@ defmodule ChatServerWeb.TypingPresenceTest do
     test "works in a conversation created after joining", ctx do
       carol = session_fixture()
       alice = join_device(ctx.alice)
-      _carol = join_device(carol)
+      carol_channel = join_device(carol)
       conversation = direct_fixture(ctx.alice, carol)
       conversation_id = conversation.id
       sync(alice)
+      sync(carol_channel)
 
       push(alice, "typing:start", typing_params(conversation))
 
@@ -118,10 +119,10 @@ defmodule ChatServerWeb.TypingPresenceTest do
 
     test "never touches the database", ctx do
       alice = join_device(ctx.alice)
-      _bob = join_device(ctx.bob)
-      assert_push "presence_state", _
-      assert_push "presence_state", _
+      bob = join_device(ctx.bob)
+      # Both channels finish their post-join queue read before queries are watched.
       sync(alice)
+      sync(bob)
 
       watch_queries()
 
@@ -215,8 +216,9 @@ defmodule ChatServerWeb.TypingPresenceTest do
 
     test "status changes never touch the database", ctx do
       alice = join_device(ctx.alice)
-      _bob = join_device(ctx.bob)
+      bob = join_device(ctx.bob)
       sync(alice)
+      sync(bob)
       assert_push "presence_diff", %{joins: _}
 
       watch_queries()

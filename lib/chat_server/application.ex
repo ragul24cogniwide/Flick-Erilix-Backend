@@ -16,6 +16,7 @@ defmodule ChatServer.Application do
       {Phoenix.PubSub, name: ChatServer.PubSub},
       ChatServerWeb.Presence,
       ChatServer.RateLimiter,
+      {Oban, Application.fetch_env!(:chat_server, Oban)},
       # Start to serve requests, typically the last entry
       ChatServerWeb.Endpoint
     ]

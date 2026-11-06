@@ -9,6 +9,7 @@ defmodule ChatServer.Messaging do
   alias ChatServer.Conversations.Member
   alias ChatServer.Messaging.{Delivery, Message}
   alias ChatServer.{Realtime, Repo}
+  alias ChatServer.Workers.PushNotification
   alias ChatServerWeb.MessageJSON
   alias Ecto.Changeset
   alias Ecto.Multi
@@ -18,6 +19,7 @@ defmodule ChatServer.Messaging do
   @default_page_size 50
   @max_page_size 100
   @pending_batch_size 200
+  @undelivered_retention_days 30
 
   def max_ciphertext_bytes, do: @max_ciphertext_bytes
 
@@ -59,22 +61,15 @@ defmodule ChatServer.Messaging do
     end
   end
 
-  # Broadcasts happen after commit, so a receiver can always find what it is told about.
-  # A device with no socket simply has no subscriber: its delivery row stays pending.
-  defp route(message, %{recipient_device_ids: device_ids}) do
-    payload = MessageJSON.message(message)
-    Enum.each(device_ids, &Realtime.broadcast_to_device(&1, "msg:new", payload))
-  end
-
   # When the insert hit the unique index, the row we read back is the original and
   # its id differs from the one generated for this attempt.
   defp fan_out(_repo, %{inserted: %{id: id}, message: %{id: original_id}}, _device_id)
        when id != original_id do
-    {:ok, %{duplicate?: true, recipient_device_ids: []}}
+    {:ok, %{duplicate?: true, recipient_device_ids: [], recipient_user_ids: []}}
   end
 
   defp fan_out(repo, %{message: message}, sending_device_id) do
-    recipient_device_ids =
+    recipient_devices =
       repo.all(
         from d in Device,
           as: :device,
@@ -83,13 +78,31 @@ defmodule ChatServer.Messaging do
           where: m.conversation_id == ^message.conversation_id,
           where: d.id != ^sending_device_id,
           where: exists(Accounts.active_session_query()),
-          select: d.id
+          select: {d.id, d.user_id}
       )
 
-    rows = Enum.map(recipient_device_ids, &%{message_id: message.id, recipient_device_id: &1})
+    {device_ids, user_ids} = Enum.unzip(recipient_devices)
+    rows = Enum.map(device_ids, &%{message_id: message.id, recipient_device_id: &1})
     repo.insert_all(Delivery, rows)
 
-    {:ok, %{duplicate?: false, recipient_device_ids: recipient_device_ids}}
+    {:ok,
+     %{
+       duplicate?: false,
+       recipient_device_ids: device_ids,
+       recipient_user_ids: Enum.uniq(user_ids)
+     }}
+  end
+
+  # Runs after commit, so a receiver can always find what it is told about. A device
+  # with no socket has no subscriber: its delivery row stays pending until it returns.
+  defp route(_message, %{duplicate?: true}), do: :ok
+
+  defp route(message, %{recipient_device_ids: device_ids, recipient_user_ids: user_ids}) do
+    payload = MessageJSON.message(message)
+    Enum.each(device_ids, &Realtime.broadcast_to_device(&1, "msg:new", payload))
+
+    online = Realtime.online_device_ids(user_ids)
+    device_ids |> Enum.reject(&MapSet.member?(online, &1)) |> PushNotification.enqueue()
   end
 
   defp validate_send(params) do
@@ -184,7 +197,28 @@ defmodule ChatServer.Messaging do
     release_delivered(message_ids)
   end
 
+  @doc """
+  Drops messages that some device still has not received after 30 days. Delivered
+  messages have no ciphertext left, so they do not match.
+  """
+  def drop_expired_messages do
+    cutoff = DateTime.add(DateTime.utc_now(), -@undelivered_retention_days, :day)
+
+    {count, _rows} =
+      Repo.delete_all(
+        from m in Message, where: not is_nil(m.ciphertext) and m.inserted_at < ^cutoff
+      )
+
+    count
+  end
+
   ## Reading
+
+  def device_has_pending?(device_id) do
+    Repo.exists?(
+      from d in Delivery, where: d.recipient_device_id == ^device_id and is_nil(d.delivered_at)
+    )
+  end
 
   @doc """
   One batch of a device's undelivered messages, oldest first. Pass the returned

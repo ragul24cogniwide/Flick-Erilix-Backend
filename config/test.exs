@@ -22,6 +22,10 @@ config :chat_server, ChatServerWeb.Endpoint,
   server: false
 
 config :chat_server, :sms_provider, ChatServer.SmsProvider.TestDouble
+config :chat_server, :push_provider, ChatServer.PushProvider.TestDouble
+
+# Jobs run only when a test performs them.
+config :chat_server, Oban, testing: :manual
 
 # Effectively off: tests that exercise limits lower them explicitly.
 config :chat_server, :rate_limits,
